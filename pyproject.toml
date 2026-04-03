@@ -1,0 +1,42 @@
+[project]
+name = "small-llm-testing"
+version = "0.1.0"
+description = "Benchmark small LLMs locally via llama.cpp on Apple Silicon"
+requires-python = ">=3.12"
+dependencies = [
+    "pillow>=11.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1",
+    "ruff>=0.11",
+    "uv-outdated>=0.1",
+    "uv-secure>=0.1",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+exclude = ["_refs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "S", "UP", "SIM", "RET", "COM", "C4", "G", "PT", "PIE", "T20", "DTZ", "ICN", "TCH", "RUF", "ANN"]
+ignore = [
+    "COM812",  # missing trailing comma (conflicts with ruff formatter)
+    "ANN401",  # Dynamically typed expressions (typing.Any) -- sometimes unavoidable
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["G004", "S108", "S310", "T20"]
+"tests/*.py" = ["S105", "S106", "S108"]
+"benchmark.py" = ["S310", "S603"]  # local benchmark: urllib to localhost, subprocess for llama-server
+"generate_test_image.py" = ["ANN"]  # PIL has no type stubs
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
