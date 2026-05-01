@@ -6,11 +6,15 @@ import argparse
 import base64
 import json
 import logging
+import re
 import subprocess
+import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,9 +28,11 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 TEST_IMAGE = ASSETS_DIR / "test_chart.png"
 HF_HUB_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
-SERVER_STARTUP_TIMEOUT = 120  # seconds -- model must be pre-downloaded
-REQUEST_TIMEOUT = 300
+SERVER_STARTUP_TIMEOUT = 300  # seconds -- 27B models take longer to mmap
+REQUEST_TIMEOUT = 120  # cap per request -- thinking-mode loops on translation prompts; fail fast
 DEFAULT_PORT = 8080
+DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperature noise
+PYEXEC_TIMEOUT = 5  # seconds budget per coding test execution
 
 
 @dataclass
@@ -37,6 +43,13 @@ class ModelConfig:
     top_p: float = 0.95
     top_k: int = 64
     supports_vision: bool = True
+    server_args: tuple[str, ...] = ()
+    # Qwen3 family ships thinking mode on by default; set False to disable via
+    # chat_template_kwargs={"enable_thinking": False} on each request.
+    thinking: bool = True
+    # Qwen3 mmproj responds well to a higher floor on visual tokens (better OCR);
+    # Gemma 4 mmproj caps image pixels lower and rejects this flag. Opt-in.
+    image_min_tokens: int = 0
 
 
 MODELS: list[ModelConfig] = [
@@ -46,8 +59,96 @@ MODELS: list[ModelConfig] = [
         hf="ggml-org/gemma-4-E2B-it-GGUF:gemma-4-e2b-it-Q8_0.gguf",
     ),
     ModelConfig(
-        name="gemma-4-e4b-Q8_0",
-        hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-e4b-it-Q8_0.gguf",
+        name="gemma-4-e4b-Q4_K_M",
+        hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-e4b-it-Q4_K_M.gguf",
+    ),
+    # Qwen 3.6 27B dense (Alibaba, April 2026) -- DISABLED on M4 16GB.
+    # Tested with UD-Q2_K_XL (~11.8 GB) + ctx=4096 + q4_0 KV cache: caused a kernel
+    # panic / forced reboot during model load. Apple GPU recommendedMaxWorkingSetSize
+    # is only 12.7 GB on this machine, so the 27B class doesn't fit. Same pattern as
+    # Gemma 4 26B-A4B (~15 GB) which also OOM'd.
+    # ModelConfig(
+    #     name="qwen3.6-27b-UD-Q2_K_XL",
+    #     hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-UD-Q2_K_XL.gguf",
+    #     temperature=0.6, top_p=0.95, top_k=20,
+    #     server_args=("-c", "4096", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0"),
+    # ),
+    # Qwen 3.5 small (Alibaba, March 2026) -- thinking mode on by default.
+    # Thinking-on params: temp=0.6, top_p=0.95, top_k=20.
+    # Thinking-off params: temp=0.7, top_p=0.8, top_k=20 (Qwen team recommendation).
+    ModelConfig(
+        name="qwen3.5-0.8b-Q8_0-think",
+        hf="unsloth/Qwen3.5-0.8B-GGUF:Qwen3.5-0.8B-Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        image_min_tokens=1024,
+    ),
+    ModelConfig(
+        name="qwen3.5-0.8b-Q8_0-nothink",
+        hf="unsloth/Qwen3.5-0.8B-GGUF:Qwen3.5-0.8B-Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        image_min_tokens=1024,
+    ),
+    ModelConfig(
+        name="qwen3.5-2b-Q8_0-think",
+        hf="unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        image_min_tokens=1024,
+    ),
+    ModelConfig(
+        name="qwen3.5-2b-Q8_0-nothink",
+        hf="unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        image_min_tokens=1024,
+    ),
+    ModelConfig(
+        name="qwen3.5-4b-Q8_0-think",
+        hf="unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        image_min_tokens=1024,
+    ),
+    ModelConfig(
+        name="qwen3.5-4b-Q8_0-nothink",
+        hf="unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        image_min_tokens=1024,
+    ),
+    # 9B: model itself ~9.5 GB, leaves <3 GB for KV. Override defaults with smaller ctx.
+    # Keep q8_0 KV (defaults). If still OOM, drop to q4_0 here.
+    ModelConfig(
+        name="qwen3.5-9b-Q8_0-think",
+        hf="unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        server_args=("-c", "8192"),
+    ),
+    ModelConfig(
+        name="qwen3.5-9b-Q8_0-nothink",
+        hf="unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        server_args=("-c", "8192"),
     ),
 ]
 
@@ -57,12 +158,158 @@ MODELS: list[ModelConfig] = [
 # ---------------------------------------------------------------------------
 
 
+# A verifier returns (ok, reason). Reason is a short string explaining a failure.
+Verifier = Callable[[str], "tuple[bool, str]"]
+
+
 @dataclass
 class Prompt:
     name: str
     category: str
     messages: list[dict[str, object]]
+    verify: Verifier
     vision: bool = False
+
+
+# ---- verifier helpers --------------------------------------------------------
+
+
+def _strip_think(text: str) -> str:
+    """Strip Qwen3 <think>...</think> blocks before checking the answer.
+
+    Llama-server already strips closed think blocks into a separate field, but if
+    the model dumps thinking in content (some templates do) we still want the answer.
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def v_keyword(*needles: str) -> Verifier:
+    """All needles must appear as case-insensitive substrings in the trimmed answer."""
+
+    def check(text: str) -> tuple[bool, str]:
+        ans = _strip_think(text)
+        if not ans:
+            return False, "empty"
+        low = ans.lower()
+        for needle in needles:
+            if needle.lower() not in low:
+                return False, f"missing {needle!r}"
+        return True, ""
+
+    return check
+
+
+def v_regex(pattern: str, *, flags: int = re.IGNORECASE) -> Verifier:
+    """Answer must match the given regex (re.search semantics)."""
+    rx = re.compile(pattern, flags)
+
+    def check(text: str) -> tuple[bool, str]:
+        ans = _strip_think(text)
+        if not ans:
+            return False, "empty"
+        return (True, "") if rx.search(ans) else (False, f"no regex match: {pattern}")
+
+    return check
+
+
+def v_number(expected: float, tol: float = 1e-6) -> Verifier:
+    """Answer must contain a number equal to `expected` within tolerance."""
+
+    def check(text: str) -> tuple[bool, str]:
+        ans = _strip_think(text)
+        if not ans:
+            return False, "empty"
+        # Find all decimal numbers in the answer (handles negatives and decimals).
+        for m in re.finditer(r"-?\d+(?:\.\d+)?", ans):
+            try:
+                val = float(m.group())
+            except ValueError:
+                continue
+            if abs(val - expected) <= tol:
+                return True, ""
+        return False, f"no number ~={expected}"
+
+    return check
+
+
+def v_yes_no(want_yes: bool) -> Verifier:
+    """Answer's first yes/no token must match. Catches 'yes, but actually no' patterns."""
+
+    def check(text: str) -> tuple[bool, str]:
+        ans = _strip_think(text).lower()
+        if not ans:
+            return False, "empty"
+        m = re.search(r"\b(yes|no)\b", ans)
+        if not m:
+            return False, "no yes/no token"
+        first = m.group(1)
+        want = "yes" if want_yes else "no"
+        return (first == want, "" if first == want else f"first token was '{first}', want '{want}'")
+
+    return check
+
+
+def v_python_exec(test_cases: list[tuple[str, object]]) -> Verifier:
+    """Extract a python code block, run it, then evaluate each test case.
+
+    test_cases: list of (call_expression, expected_value), e.g.
+        [("total([1,2,3])", 6), ("total([])", 0)].
+    Returns (True, '') only if all cases match. Subprocess timeout = PYEXEC_TIMEOUT.
+    """
+
+    def extract_code(text: str) -> str:
+        ans = _strip_think(text)
+        # Prefer fenced ```python ... ``` blocks; fall back to first ``` block.
+        m = re.search(r"```(?:python)?\s*\n(.*?)```", ans, flags=re.DOTALL)
+        if m:
+            return m.group(1)
+        return ans  # raw response, hope it's parseable Python
+
+    def check(text: str) -> tuple[bool, str]:
+        code = extract_code(text)
+        if not code.strip():
+            return False, "empty"
+        # Build a runner that imports the user code, evaluates each test, prints OK/MISMATCH.
+        prefix = textwrap.dedent("""
+            import sys, json
+            ns = {}
+            exec(compile(_USER_CODE_, '<llm>', 'exec'), ns)
+        """).strip()
+        # We pass user code via a sentinel substitution to avoid shell quoting issues.
+        runner = "_USER_CODE_ = " + json.dumps(code) + "\n" + prefix + "\nresults = []\n"
+        for call, want in test_cases:
+            runner += (
+                f"try:\n"
+                f"    got = eval({json.dumps(call)}, ns)\n"
+                f"    results.append((got == {json.dumps(want)}, repr(got)))\n"
+                f"except Exception as e:\n"
+                f"    results.append((False, f'EXC {{type(e).__name__}}: {{e}}'))\n"
+            )
+        runner += "print(json.dumps(results))\n"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", runner],
+                capture_output=True,
+                text=True,
+                timeout=PYEXEC_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "exec timeout"
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip().splitlines()[-1:] or ["unknown"]
+            return False, f"exec error: {err[0][:80]}"
+        try:
+            results = json.loads(proc.stdout.strip())
+        except json.JSONDecodeError:
+            return False, "exec produced no JSON output"
+        for i, (ok, got) in enumerate(results):
+            if not ok:
+                call, want = test_cases[i]
+                return False, f"{call} -> {got}, want {want!r}"
+        return True, ""
+
+    return check
 
 
 def _user(text: str) -> list[dict[str, object]]:
@@ -85,70 +332,171 @@ def _vision_user(image_path: Path, text: str) -> list[dict[str, object]]:
     ]
 
 
+# Tighter answers + verifiable correctness. Each prompt is sampled DEFAULT_N_RUNS times
+# at temperature > 0; we report passes/N. A 'pass' must contain the right answer,
+# not just plausibly mention it.
+
+# Vision prompt placeholders (messages filled in _build_prompts).
+_VISION_MAX_PLACEHOLDER: list[dict[str, object]] = []
+_VISION_MIN_PLACEHOLDER: list[dict[str, object]] = []
+_VISION_DIFF_PLACEHOLDER: list[dict[str, object]] = []
+
+
 PROMPTS: list[Prompt] = [
+    # ---- arithmetic / math (3 problems) ----
     Prompt(
-        name="reasoning_math",
+        name="math_mul",
+        category="math",
+        messages=_user("What is 23 multiplied by 17? Reply with only the number."),
+        verify=v_number(391),
+    ),
+    Prompt(
+        name="math_div",
+        category="math",
+        messages=_user("What is 144 divided by 12? Reply with only the number."),
+        verify=v_number(12),
+    ),
+    Prompt(
+        name="math_percent",
+        category="math",
+        messages=_user("What is 15% of 80? Reply with only the number."),
+        verify=v_number(12),
+    ),
+    # ---- word problems (multi-step reasoning) ----
+    Prompt(
+        name="word_speed",
         category="reasoning",
         messages=_user(
-            "Solve step by step: A train travels 120 km in 2 hours. "
-            "It then speeds up by 20 km/h. How long does it take to travel the next 180 km?"
+            "A train travels 120 km in 2 hours. Then it speeds up by 20 km/h. "
+            "How long (in hours) does it take to travel the next 180 km? "
+            "Reply with only the number."
         ),
+        verify=v_number(2.25, tol=0.01),
     ),
     Prompt(
-        name="coding_python",
+        name="word_age",
+        category="reasoning",
+        messages=_user(
+            "Alice is twice as old as Bob. In 5 years, Alice will be 25. "
+            "How old is Bob now? Reply with only the number."
+        ),
+        # Alice now = 20, Bob = 10
+        verify=v_number(10),
+    ),
+    # ---- logic (yes-bias trap: include 'no' answer) ----
+    Prompt(
+        name="logic_syllogism_yes",
+        category="reasoning",
+        messages=_user("All cats are mammals. Tom is a cat. Is Tom a mammal? Answer with one word: yes or no."),
+        verify=v_yes_no(want_yes=True),
+    ),
+    Prompt(
+        name="logic_syllogism_no",
+        category="reasoning",
+        messages=_user(
+            "All birds can fly. Penguins are birds. From ONLY these two statements, "
+            "can we logically conclude that penguins can fly? "
+            "Answer with one word: yes or no."
+        ),
+        # Strict syllogism: yes follows formally. But many models trip on real-world
+        # knowledge override. Honest answer per pure logic = yes.
+        verify=v_yes_no(want_yes=True),
+    ),
+    Prompt(
+        name="logic_negation",
+        category="reasoning",
+        messages=_user(
+            "Some cars are not red. Therefore, no cars are red. "
+            "Is this conclusion logically valid? Answer with one word: yes or no."
+        ),
+        verify=v_yes_no(want_yes=False),
+    ),
+    # ---- coding (executed against test cases) ----
+    Prompt(
+        name="code_total",
         category="coding",
         messages=_user(
-            "Write a Python function that takes a list of integers and returns "
-            "the longest increasing subsequence. Include type hints."
+            "Write a Python function named `total` that takes a list of integers "
+            "and returns their sum. Reply with code only, in a single ```python``` block."
+        ),
+        verify=v_python_exec(
+            [
+                ("total([1, 2, 3])", 6),
+                ("total([])", 0),
+                ("total([-5, 5])", 0),
+                ("total([10])", 10),
+            ]
         ),
     ),
     Prompt(
-        name="coding_rust",
+        name="code_fizzbuzz",
         category="coding",
         messages=_user(
-            "Write a Rust function that checks whether a given string is a valid IPv4 address. "
-            "Do not use external crates."
+            "Write a Python function `fizzbuzz(n: int) -> str` that returns "
+            "'Fizz' if n is divisible by 3, 'Buzz' if divisible by 5, "
+            "'FizzBuzz' if divisible by both, otherwise the number as a string. "
+            "Reply with code only, in a single ```python``` block."
+        ),
+        verify=v_python_exec(
+            [
+                ("fizzbuzz(3)", "Fizz"),
+                ("fizzbuzz(5)", "Buzz"),
+                ("fizzbuzz(15)", "FizzBuzz"),
+                ("fizzbuzz(7)", "7"),
+                ("fizzbuzz(30)", "FizzBuzz"),
+            ]
         ),
     ),
+    # ---- summarization (must mention key term, must be short) ----
     Prompt(
-        name="creative_writing",
-        category="creative",
-        messages=_user("Write a short story (under 200 words) about a robot who discovers it can dream."),
-    ),
-    Prompt(
-        name="summarization",
+        name="summarize",
         category="language",
         messages=_user(
-            "Summarize the following in 2-3 sentences: "
+            "Summarize the following in one sentence under 30 words: "
             "Large language models are trained on vast amounts of text data using "
             "self-supervised learning. They predict the next token in a sequence, "
-            "which allows them to learn grammar, facts, reasoning abilities, and "
-            "even some biases present in the training data. Fine-tuning and RLHF "
-            "are then used to align the model with human preferences and make it "
-            "more helpful and safe."
+            "which allows them to learn grammar, facts, and reasoning abilities."
         ),
+        verify=v_keyword("language model"),
     ),
+    # ---- translation (idiomatic, multiple acceptable forms) ----
     Prompt(
-        name="reasoning_logic",
-        category="reasoning",
-        messages=_user(
-            "If all roses are flowers, and some flowers fade quickly, "
-            "can we conclude that some roses fade quickly? Explain your reasoning."
-        ),
-    ),
-    Prompt(
-        name="multilingual",
+        name="translate_fr_hello",
         category="language",
         messages=_user(
-            "Translate the following to French, German, and Japanese: 'The quick brown fox jumps over the lazy dog.'"
+            "Translate the English greeting 'hello' to French. "
+            "Reply with only the French word, no punctuation, no quotes."
         ),
+        # Bonjour, Salut, both acceptable.
+        verify=v_regex(r"\b(bonjour|salut)\b"),
     ),
     Prompt(
-        name="analysis",
-        category="reasoning",
-        messages=_user(
-            "Compare and contrast microservices and monolithic architectures. Give 3 pros and 3 cons of each."
-        ),
+        name="translate_es_thanks",
+        category="language",
+        messages=_user("Translate 'thank you' to Spanish. Reply with only the Spanish word or phrase."),
+        verify=v_regex(r"\bgracias\b"),
+    ),
+    # ---- vision (3 different questions on same chart) ----
+    Prompt(
+        name="vision_max",
+        category="vision",
+        messages=_VISION_MAX_PLACEHOLDER,
+        verify=v_number(71),
+        vision=True,
+    ),
+    Prompt(
+        name="vision_min",
+        category="vision",
+        messages=_VISION_MIN_PLACEHOLDER,
+        verify=v_number(35),
+        vision=True,
+    ),
+    Prompt(
+        name="vision_diff",
+        category="vision",
+        messages=_VISION_DIFF_PLACEHOLDER,
+        verify=v_number(36),
+        vision=True,
     ),
 ]
 
@@ -159,30 +507,78 @@ PROMPTS: list[Prompt] = [
 
 
 @dataclass
+class Attempt:
+    tokens: int
+    time_s: float
+    response: str
+    ok: bool
+    fail_reason: str = ""
+
+
+@dataclass
 class PromptResult:
     prompt_name: str
     category: str
-    tokens: int
-    time_s: float
-    tok_per_s: float
-    response: str
-    ok: bool
+    attempts: list[Attempt] = field(default_factory=list[Attempt])
+
+    @property
+    def passes(self) -> int:
+        return sum(1 for a in self.attempts if a.ok)
+
+    @property
+    def n(self) -> int:
+        return len(self.attempts)
+
+    @property
+    def pass_rate(self) -> float:
+        return (self.passes / self.n) if self.n else 0.0
+
+    @property
+    def total_time_s(self) -> float:
+        return sum(a.time_s for a in self.attempts)
+
+    @property
+    def total_tokens(self) -> int:
+        return sum(a.tokens for a in self.attempts)
+
+    @property
+    def gen_tok_per_s(self) -> float:
+        """tok/s computed only over attempts that produced >=50 tokens (warmup-free)."""
+        long_attempts = [a for a in self.attempts if a.tokens >= 50 and a.time_s > 0]
+        if not long_attempts:
+            return 0.0
+        toks = sum(a.tokens for a in long_attempts)
+        secs = sum(a.time_s for a in long_attempts)
+        return toks / secs if secs > 0 else 0.0
 
 
 @dataclass
 class ModelResult:
     model_name: str
     hf_id: str
-    prompts: list[PromptResult]
-    avg_tok_s: float = 0.0
+    prompts: list[PromptResult] = field(default_factory=list[PromptResult])
 
     @property
-    def passed(self) -> int:
-        return sum(1 for p in self.prompts if p.ok)
+    def passes(self) -> int:
+        """Sum of pass-rates across prompts (e.g. 6.67 / 14)."""
+        return sum(p.passes for p in self.prompts)
 
     @property
-    def total(self) -> int:
-        return len(self.prompts)
+    def attempts_total(self) -> int:
+        return sum(p.n for p in self.prompts)
+
+    @property
+    def total_time_s(self) -> float:
+        return sum(p.total_time_s for p in self.prompts)
+
+    @property
+    def gen_tok_per_s(self) -> float:
+        long_attempts = [a for p in self.prompts for a in p.attempts if a.tokens >= 50 and a.time_s > 0]
+        if not long_attempts:
+            return 0.0
+        toks = sum(a.tokens for a in long_attempts)
+        secs = sum(a.time_s for a in long_attempts)
+        return toks / secs if secs > 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -190,14 +586,46 @@ class ModelResult:
 # ---------------------------------------------------------------------------
 
 
-def _is_model_downloaded(model: ModelConfig) -> bool:
-    """Check if the model is already cached locally."""
-    hf_repo = model.hf.split(":")[0]
+def _resolve_local_paths(hf_spec: str) -> tuple[Path, Path | None] | None:
+    """Resolve cached local paths for an HF model spec 'repo:filename'.
+
+    Returns (model_path, mmproj_path or None) or None if not cached.
+    The llama-server '-hf' resolver hangs on some Qwen repos even when files are
+    cached, so we always start with '-m' pointing at the local file. Prefers
+    mmproj-BF16 (Qwen models train in bf16; better dynamic range than F16).
+    """
+    hf_repo, _, filename = hf_spec.partition(":")
+    if not filename:
+        return None
     cache_name = f"models--{hf_repo.replace('/', '--')}"
     snapshots = HF_HUB_DIR / cache_name / "snapshots"
     if not snapshots.exists():
-        return False
-    return any(snapshots.iterdir())
+        return None
+    # Prefer snapshots that include an mmproj projector (multiple snapshot dirs may
+    # exist from interrupted downloads; the first one iterdir() returns may be partial).
+    best: tuple[Path, Path | None] | None = None
+    for snap in snapshots.iterdir():
+        model_path = snap / filename
+        if not model_path.exists():
+            continue
+        mmproj: Path | None = None
+        for preferred in ("mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf"):
+            cand = snap / preferred
+            if cand.exists():
+                mmproj = cand
+                break
+        if mmproj is None:
+            mmproj = next(iter(snap.glob("mmproj*.gguf")), None)
+        if mmproj is not None:
+            return model_path, mmproj
+        if best is None:
+            best = (model_path, None)
+    return best
+
+
+def _is_model_downloaded(model: ModelConfig) -> bool:
+    """Check if the model is already cached locally."""
+    return _resolve_local_paths(model.hf) is not None
 
 
 def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
@@ -218,9 +646,49 @@ def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
     raise TimeoutError(msg)
 
 
-def _start_server(hf_model: str, port: int) -> subprocess.Popen[bytes]:
-    """Start llama-server with the given HF model."""
-    cmd = [LLAMA_SERVER, "-hf", hf_model, "--port", str(port)]
+# Best-practice defaults for Apple Silicon Metal + Qwen3 family.
+# -ngl 99: full GPU offload (no-op safety on Apple). -fa on: flash attention (Metal-supported).
+# -ub 1024: larger ubatch speeds up prompt processing for vision/long prompts.
+# --cache-type-k/v q8_0: ~50% KV cut at near-zero quality cost (fa required for quantized KV).
+DEFAULT_SERVER_ARGS: tuple[str, ...] = (
+    "-ngl",
+    "99",
+    "-fa",
+    "on",
+    "-ub",
+    "1024",
+    "-c",
+    "16384",
+    "--cache-type-k",
+    "q8_0",
+    "--cache-type-v",
+    "q8_0",
+)
+
+
+def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
+    """Start llama-server with the given model config (uses local cached file via -m)."""
+    paths = _resolve_local_paths(model.hf)
+    if paths is None:
+        msg = f"Model file not cached: {model.hf}"
+        raise FileNotFoundError(msg)
+    model_path, mmproj_path = paths
+    # Per-model server_args override defaults for the same flag (last value wins in llama-server).
+    cmd = [
+        LLAMA_SERVER,
+        "-m",
+        str(model_path),
+        "--port",
+        str(port),
+        *DEFAULT_SERVER_ARGS,
+        *model.server_args,
+    ]
+    if mmproj_path is not None and model.supports_vision:
+        cmd.extend(["--mmproj", str(mmproj_path)])
+        if model.image_min_tokens > 0:
+            # Forces enough visual tokens for OCR / chart reading. Qwen3 mmproj
+            # supports up to ~2048; Gemma 4 mmproj rejects this flag.
+            cmd.extend(["--image-min-tokens", str(model.image_min_tokens)])
     log.info("Starting server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _wait_for_server(port)
@@ -245,16 +713,21 @@ def _stop_server(proc: subprocess.Popen[bytes]) -> None:
 def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int) -> tuple[str, int, float]:
     """Send a chat completion request. Returns (response_text, token_count, elapsed_s)."""
     api_url = API_URL.format(port=port)
-    payload = json.dumps(
-        {
-            "messages": messages,
-            "max_tokens": 4096,
-            "temperature": model_cfg.temperature,
-            "top_p": model_cfg.top_p,
-            "top_k": model_cfg.top_k,
-        },
-        ensure_ascii=False,
-    ).encode()
+    # Qwen3 thinking mode needs much more headroom: official guidance is up to 32k for
+    # general tasks, 80k+ for math/code. 4k overflows even the 0.8B inside <think>.
+    max_tokens = 16384 if model_cfg.thinking else 4096
+    req_body: dict[str, object] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": model_cfg.temperature,
+        "top_p": model_cfg.top_p,
+        "top_k": model_cfg.top_k,
+        # Qwen team recommendation: explicitly pin min_p=0 (server default may clip the tail).
+        "min_p": 0,
+    }
+    if not model_cfg.thinking:
+        req_body["chat_template_kwargs"] = {"enable_thinking": False}
+    payload = json.dumps(req_body, ensure_ascii=False).encode()
 
     req = urllib.request.Request(
         api_url,
@@ -277,60 +750,72 @@ def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int) 
 # ---------------------------------------------------------------------------
 
 
-def _run_prompt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> PromptResult:
-    log.info("  Running prompt: %s", prompt.name)
+def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attempt:
     try:
         text, tokens, elapsed = _chat(prompt.messages, model_cfg, port)
-        tok_s = tokens / elapsed if elapsed > 0 else 0.0
-        log.info("    %d tokens in %.1fs (%.1f tok/s)", tokens, elapsed, tok_s)
-        return PromptResult(
-            prompt_name=prompt.name,
-            category=prompt.category,
-            tokens=tokens,
-            time_s=round(elapsed, 2),
-            tok_per_s=round(tok_s, 1),
-            response=text,
-            ok=True,
-        )
-    except Exception:
-        log.exception("    Failed: %s", prompt.name)
-        return PromptResult(
-            prompt_name=prompt.name,
-            category=prompt.category,
-            tokens=0,
-            time_s=0.0,
-            tok_per_s=0.0,
-            response="",
-            ok=False,
-        )
+    except Exception as e:
+        log.warning("    api error: %s", e)
+        return Attempt(tokens=0, time_s=0.0, response="", ok=False, fail_reason=f"api error: {type(e).__name__}")
+    ok, reason = prompt.verify(text)
+    return Attempt(tokens=tokens, time_s=round(elapsed, 2), response=text, ok=ok, fail_reason=reason)
+
+
+def _run_prompt(prompt: Prompt, model_cfg: ModelConfig, port: int, n: int) -> PromptResult:
+    log.info("  Running prompt: %s (n=%d)", prompt.name, n)
+    result = PromptResult(prompt_name=prompt.name, category=prompt.category)
+    for i in range(n):
+        a = _run_one_attempt(prompt, model_cfg, port)
+        result.attempts.append(a)
+        status = "PASS" if a.ok else f"FAIL ({a.fail_reason})"
+        log.info("    [%d/%d] %d tok in %.1fs -- %s", i + 1, n, a.tokens, a.time_s, status)
+    log.info("    => %d/%d pass, %.1fs total", result.passes, result.n, result.total_time_s)
+    return result
+
+
+# Per-name vision question text. Test chart shows Q1=$42M, Q2=$58M, Q3=$35M, Q4=$71M.
+_VISION_QUESTIONS: dict[str, str] = {
+    "vision_max": (
+        "Look at this bar chart. What is the value of the tallest bar? Reply with just the number (no units, no $)."
+    ),
+    "vision_min": (
+        "Look at this bar chart. What is the value of the shortest bar? Reply with just the number (no units, no $)."
+    ),
+    "vision_diff": (
+        "Look at this bar chart. Subtract the shortest bar's value from the tallest bar's value. "
+        "Reply with just the resulting number (no units, no $)."
+    ),
+}
 
 
 def _build_prompts() -> list[Prompt]:
-    """Build prompt list, adding vision prompt only if test image exists."""
-    prompts = list(PROMPTS)
-    if TEST_IMAGE.exists():
-        prompts.append(
-            Prompt(
-                name="vision_chart",
-                category="vision",
-                messages=_vision_user(
-                    TEST_IMAGE,
-                    "Describe this chart. What quarter had the highest revenue? "
-                    "What is the approximate difference between the highest and lowest values?",
-                ),
+    """Build prompt list. Vision prompts get their messages filled in if the image exists."""
+    prompts: list[Prompt] = []
+    for p in PROMPTS:
+        if p.vision:
+            if not TEST_IMAGE.exists():
+                log.warning("Skipping vision prompt %s -- test image missing at %s", p.name, TEST_IMAGE)
+                continue
+            question = _VISION_QUESTIONS.get(p.name)
+            if question is None:
+                log.warning("No vision question registered for %s -- skipping", p.name)
+                continue
+            p = Prompt(
+                name=p.name,
+                category=p.category,
+                messages=_vision_user(TEST_IMAGE, question),
+                verify=p.verify,
                 vision=True,
-            ),
-        )
-    else:
-        log.warning("Test image not found at %s -- skipping vision prompt", TEST_IMAGE)
+            )
+        prompts.append(p)
     return prompts
 
 
 def run_benchmark(
     models: list[ModelConfig] | None = None,
     port: int = DEFAULT_PORT,
+    n: int = DEFAULT_N_RUNS,
 ) -> list[ModelResult]:
-    """Run all prompts against all models."""
+    """Run all prompts against all models. Each prompt is sampled `n` times."""
     if models is None:
         models = MODELS
     prompts = _build_prompts()
@@ -341,19 +826,30 @@ def run_benchmark(
             log.warning("Skipping %s -- not downloaded. See README for download instructions.", model.name)
             continue
         log.info("=== Model: %s ===", model.name)
-        proc = _start_server(model.hf, port)
+        proc = _start_server(model, port)
         try:
-            mr = ModelResult(model_name=model.name, hf_id=model.hf, prompts=[])
+            mr = ModelResult(model_name=model.name, hf_id=model.hf)
             for prompt in prompts:
                 if prompt.vision and not model.supports_vision:
                     log.info("  Skipping vision prompt for %s", model.name)
                     continue
-                pr = _run_prompt(prompt, model, port)
+                pr = _run_prompt(prompt, model, port, n)
                 mr.prompts.append(pr)
-            ok_results = [p for p in mr.prompts if p.ok]
-            if ok_results:
-                mr.avg_tok_s = round(sum(p.tok_per_s for p in ok_results) / len(ok_results), 1)
             results.append(mr)
+            # Persist after each model so a crash/sleep does not lose prior results.
+            RESULTS_DIR.mkdir(exist_ok=True)
+            _save_json(results)
+            _save_markdown(results)
+            per_model_path = RESULTS_DIR / f"benchmark.{model.name}.json"
+            per_model_path.write_text(
+                json.dumps(
+                    {"timestamp": datetime.now(tz=UTC).isoformat(), "models": [_model_to_dict(mr)]},
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+            )
+            log.info("Saved per-model results: %s", per_model_path)
         finally:
             _stop_server(proc)
 
@@ -365,30 +861,44 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 
+def _model_to_dict(r: ModelResult) -> dict[str, object]:
+    return {
+        "model": r.model_name,
+        "hf_id": r.hf_id,
+        "passes": r.passes,
+        "attempts_total": r.attempts_total,
+        "total_time_s": round(r.total_time_s, 2),
+        "gen_tok_per_s": round(r.gen_tok_per_s, 1),
+        "prompts": [
+            {
+                "name": p.prompt_name,
+                "category": p.category,
+                "passes": p.passes,
+                "n": p.n,
+                "pass_rate": round(p.pass_rate, 3),
+                "total_tokens": p.total_tokens,
+                "total_time_s": round(p.total_time_s, 2),
+                "attempts": [
+                    {
+                        "tokens": a.tokens,
+                        "time_s": a.time_s,
+                        "ok": a.ok,
+                        "fail_reason": a.fail_reason,
+                        "response": a.response,
+                    }
+                    for a in p.attempts
+                ],
+            }
+            for p in r.prompts
+        ],
+    }
+
+
 def _save_json(results: list[ModelResult]) -> Path:
     path = RESULTS_DIR / "benchmark.json"
     data = {
         "timestamp": datetime.now(tz=UTC).isoformat(),
-        "models": [
-            {
-                "model": r.model_name,
-                "hf_id": r.hf_id,
-                "avg_tok_s": r.avg_tok_s,
-                "prompts": [
-                    {
-                        "name": p.prompt_name,
-                        "category": p.category,
-                        "tokens": p.tokens,
-                        "time_s": p.time_s,
-                        "tok_per_s": p.tok_per_s,
-                        "ok": p.ok,
-                        "response": p.response,
-                    }
-                    for p in r.prompts
-                ],
-            }
-            for r in results
-        ],
+        "models": [_model_to_dict(r) for r in results],
     }
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     log.info("JSON results saved to %s", path)
@@ -402,18 +912,18 @@ def _save_markdown(results: list[ModelResult]) -> Path:
         "",
         f"Generated: {datetime.now(tz=UTC).strftime('%Y-%m-%d %H:%M UTC')}",
         "",
+        "Each prompt sampled multiple times; cell shows passes/n.",
+        "Wall-clock total = sum of all attempt times. tok/s computed only over attempts >=50 tokens.",
+        "",
+        "## Summary",
+        "",
+        "| Model | Passes | Total time | tok/s (gen, long-only) |",
+        "|---|---|---|---|",
     ]
-
-    lines.extend(
-        [
-            "## Summary",
-            "",
-            "| Model | Avg tok/s | Passed |",
-            "|-------|-----------|--------|",
-        ]
-    )
     for r in results:
-        lines.append(f"| {r.model_name} | {r.avg_tok_s} | {r.passed}/{r.total} |")
+        lines.append(
+            f"| {r.model_name} | {r.passes}/{r.attempts_total} | {r.total_time_s:.1f}s | {r.gen_tok_per_s:.1f} |"
+        )
     lines.append("")
 
     for r in results:
@@ -421,13 +931,16 @@ def _save_markdown(results: list[ModelResult]) -> Path:
             [
                 f"## {r.model_name}",
                 "",
-                "| Prompt | Category | Tokens | Time (s) | tok/s | OK |",
-                "|--------|----------|--------|----------|-------|----|",
+                "| Prompt | Category | Passes | Tokens (sum) | Time (sum, s) | First fail reason |",
+                "|---|---|---|---|---|---|",
             ]
         )
         for p in r.prompts:
-            ok_str = "yes" if p.ok else "no"
-            lines.append(f"| {p.prompt_name} | {p.category} | {p.tokens} | {p.time_s} | {p.tok_per_s} | {ok_str} |")
+            first_fail = next((a.fail_reason for a in p.attempts if not a.ok), "")
+            lines.append(
+                f"| {p.prompt_name} | {p.category} | {p.passes}/{p.n} | "
+                f"{p.total_tokens} | {p.total_time_s:.1f} | {first_fail} |"
+            )
         lines.append("")
 
     path.write_text("\n".join(lines))
@@ -449,6 +962,13 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Run only the model with this name (substring match)",
     )
+    parser.add_argument(
+        "-n",
+        "--n-runs",
+        type=int,
+        default=DEFAULT_N_RUNS,
+        help=f"Sample each prompt this many times (default: {DEFAULT_N_RUNS})",
+    )
     return parser.parse_args()
 
 
@@ -468,18 +988,19 @@ def main() -> None:
             log.error("No model matching '%s' found", args.model)
             return
 
-    results = run_benchmark(models, port=args.port)
+    results = run_benchmark(models, port=args.port, n=args.n_runs)
     RESULTS_DIR.mkdir(exist_ok=True)
     _save_json(results)
     _save_markdown(results)
 
     for r in results:
         log.info(
-            "%s: avg %.1f tok/s, %d/%d passed",
+            "%s: %d/%d pass in %.1fs, %.1f tok/s",
             r.model_name,
-            r.avg_tok_s,
-            r.passed,
-            r.total,
+            r.passes,
+            r.attempts_total,
+            r.total_time_s,
+            r.gen_tok_per_s,
         )
 
 
