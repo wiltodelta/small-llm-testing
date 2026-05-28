@@ -12,26 +12,40 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 | [Qwen3.5-2B](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 2B | Q8_0 | March 2026 | same |
 | [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 4B | Q8_0 | March 2026 | same |
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
+| [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | Q4_K_M (~16.8 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Qwen 3.6 27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | 27B dense | Q4_K_M (~16.8 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
 
-Each Qwen3.5 model is benchmarked twice: with thinking mode on (`-think`, slower
-but better on reasoning) and off (`-nothink`, fast direct answers).
+Each Qwen model is benchmarked twice: with thinking mode on (`-think`, slower
+but better on reasoning) and off (`-nothink`, fast direct answers). Exception:
+Gemma has no thinking mode.
 
-### Models that don't work on 16 GB
+Qwen 3.6 27B gets a third run, `-mtp-nothink`, using the
+[MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) with multi-token
+prediction (`--spec-type draft-mtp`) for an A/B tok/s comparison against plain
+`-nothink`. Vision is off for that run (llama.cpp does not yet support `--mmproj` with MTP).
 
-| Model | Issue |
-|-------|-------|
-| Gemma 4 26B-A4B | OOM -- needs 24+ GB RAM |
-| Qwen 3.6 27B (Q2_K_XL) | Kernel panic during load -- recommendedMaxWorkingSetSize is only 12.7 GB on M4 base |
-| Qwen 3.6 35B-A3B (any quant) | Same memory class as 27B; total file size 12+ GB even at Q2 |
-| Phi-4-Reasoning 15B | Too slow (7.9 tok/s), most prompts timeout |
+### Memory class reference
 
-Qwen3.5-9B fits with `-c 8192 --cache-type-k q8_0 --cache-type-v q8_0` (we set
-this per-model). Without those overrides the default 256K context overflows GPU memory.
+The machine has a 32 GB unified-memory budget with a ~25 GB GPU working set (see
+Hardware below). Gemma 4 26B-A4B and Qwen 3.6 27B (each ~16.8 GB) were OOM /
+kernel-panic on the previous 16 GB machine and now fit. Excluded:
+
+| Model | Status |
+|-------|--------|
+| Qwen 3.6 35B-A3B UD-Q4_K_M (~22.1 GB) | Excluded -- too marginal: model alone is 88% of the working set, leaving <3 GB for KV + compute. A Q3_K_M (~17 GB) quant would fit if needed later. |
+| Phi-4-Reasoning 15B | Excluded -- too slow (7.9 tok/s, most prompts timeout). Not a memory limit. |
+| Zyphra ZAYA1-8B | Excluded -- hybrid-Mamba MoE, no working llama.cpp path (official deploy is a custom vLLM fork); text-only. |
+
+`Gemma 4 26B-A4B` (~16.8 GB) runs at default ctx; `Qwen 3.6 27B` (~16.8 GB) uses
+`-c 8192` for KV headroom. `Qwen3.5-9B` no longer needs the old `-c 8192` override --
+on the ~25 GB working set it runs at default ctx (model + KV ~12.5 GB).
 
 ## Hardware
 
-- MacBook Air (M4, 2025), 10-core CPU, 10-core GPU, 16 GB unified memory, macOS Tahoe
-- Apple GPU `recommendedMaxWorkingSetSize` is ~12.7 GB on this machine.
+- Apple M5, 32 GB unified memory, macOS Tahoe.
+- Apple GPU `recommendedMaxWorkingSetSize` is ~24.96 GB (26800603136 bytes) on this
+  machine, measured via Metal `MTLCreateSystemDefaultDevice().recommendedMaxWorkingSetSize`.
+  This is the practical ceiling for model weights + KV cache + compute buffers.
 
 ## Prerequisites
 
@@ -54,6 +68,10 @@ for repo, files in [
     ('unsloth/Qwen3.5-2B-GGUF',   ['Qwen3.5-2B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-4B-GGUF',   ['Qwen3.5-4B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-9B-GGUF',   ['Qwen3.5-9B-Q8_0.gguf',   'mmproj-F16.gguf']),
+    ('ggml-org/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-Q4_K_M.gguf', 'mmproj-gemma-4-26B-A4B-it-Q8_0.gguf']),
+    ('unsloth/Qwen3.6-27B-GGUF',  ['Qwen3.6-27B-Q4_K_M.gguf', 'mmproj-F16.gguf']),
+    # MTP variant for the A/B tok/s run -- vision off (MTP + mmproj unsupported), no mmproj.
+    ('unsloth/Qwen3.6-27B-MTP-GGUF', ['Qwen3.6-27B-Q4_K_M.gguf']),
 ]:
     for f in files:
         hf_hub_download(repo, f)
@@ -134,13 +152,24 @@ Each model uses vendor-recommended parameters; see `MODELS` in `benchmark.py`:
 For Qwen vision: additional `--image-min-tokens 1024` (forces enough visual tokens for
 chart/OCR reading -- Gemma's mmproj rejects this flag and gets it omitted).
 
-For Qwen3.5-9B: `-c 8192` overrides default to leave KV cache headroom.
+Per-model context overrides (memory headroom on the ~25 GB working set):
+
+- Qwen 3.6 27B: `-c 8192` (model + KV ~20 GB).
+- Qwen3.5-9B: no override -- runs at default `-c 16384` (model + KV ~12.5 GB).
+
+Multi-token prediction (Qwen 3.6 27B `-mtp-nothink`): the MTP head is embedded in
+the MTP GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`
+(llama-server build 9380 / d205df681). `--mmproj` and `-np > 1` are not yet supported
+with MTP, so this run is vision-off and single-stream.
 
 ## Results
 
 See `results/COMPARISON.md` for the full table and per-model breakdown.
 
-### Summary on M4 16GB, n=3 (April 2026 benchmark)
+### Summary on M4 16GB, n=3 (April 2026 baseline -- prior 16 GB machine)
+
+These are the prior-machine results, kept as a baseline. The new candidate models
+(Gemma 4 26B-A4B, Qwen 3.6 27B + its MTP A/B) are not yet run; rerun on the M5 to refresh.
 
 | Model | Score | % | Wall time | tok/s (gen) |
 |---|---|---|---|---|

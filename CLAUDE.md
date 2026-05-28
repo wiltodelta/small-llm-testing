@@ -1,6 +1,7 @@
 # small-llm-testing
 
-Benchmark small LLMs locally via llama.cpp on Apple Silicon M4 16GB.
+Benchmark small LLMs locally via llama.cpp on Apple Silicon (M5, 32 GB unified
+memory, ~24.96 GB GPU working set).
 
 ## How to run
 
@@ -27,7 +28,10 @@ so a closed lid doesn't kill them.
 
 ## Scripts
 
-- `maintain.sh` -- uv sync + ruff check/fix + format + pyright
+- `maintain.sh` -- uv sync + uv-outdated + uv-secure + ruff check/fix + format + pyright.
+  Note: `set -e` makes the whole script abort at `uv-secure` if any dependency has a
+  CVE, before reaching ruff/pyright. To validate code edits when an unrelated transitive
+  CVE blocks it, run directly: `uv run ruff check && uv run ruff format --check && uv run pyright`.
 - `benchmark.py` -- starts llama-server per model, runs 16 prompts x N samples,
   saves per-model and aggregated results
 - `generate_test_image.py` -- creates `assets/test_chart.png` for vision prompts
@@ -38,7 +42,9 @@ so a closed lid doesn't kill them.
   - `temperature`, `top_p`, `top_k` (vendor-recommended defaults)
   - `thinking: bool` -- toggles `chat_template_kwargs={"enable_thinking": False}` per request
   - `image_min_tokens` -- Qwen-only; forces visual token floor for OCR/chart accuracy
-  - `server_args` -- per-model llama-server overrides (e.g. `-c 8192` for 9B)
+  - `server_args` -- per-model llama-server overrides (e.g. `-c 8192` for 27B, or
+    `--spec-type draft-mtp --spec-draft-n-max 2 -np 1` for the 27B MTP A/B run --
+    MTP needs `supports_vision=False` since `--mmproj` is unsupported with MTP)
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
   `-ngl 99 -fa on -ub 1024 -c 16384 --cache-type-k q8_0 --cache-type-v q8_0`
 - llama-server binary: `/opt/homebrew/bin/llama-server`
@@ -79,9 +85,16 @@ Verifiers replace substring matching with:
 - Stale `python3.1` processes can hold port 8080 after a previous llama-server crashes.
   Check `lsof -i :8080` before starting a new run.
 
-## Models that don't fit on M4 16GB
+## Memory class (M5, ~24.96 GB working set)
 
-- Gemma 4 26B-A4B (~15 GB Q4) -- OOM
-- Qwen 3.6 27B Q2_K_XL (~11.8 GB) -- kernel panic during model load
-  (Apple GPU recommendedMaxWorkingSetSize is only 12.7 GB on this M4)
-- Qwen 3.6 35B-A3B (any quant) -- same memory class
+Measure the real GPU working set (the ceiling for weights + KV + compute buffers) with
+a one-line Swift Metal query (do not guess it):
+`echo 'import Metal; print(MTLCreateSystemDefaultDevice()!.recommendedMaxWorkingSetSize)' | swift -`
+
+- Gemma 4 26B-A4B Q4_K_M (~16.8 GB) and Qwen 3.6 27B Q4_K_M (~16.8 GB) fit
+  comfortably (these were OOM / kernel-panic on the old 16 GB machine).
+- Qwen 3.6 35B-A3B UD-Q4_K_M (~22.1 GB) excluded -- too marginal (88% of working
+  set, <3 GB left for KV + compute). A Q3_K_M (~17 GB) quant would fit if revisited.
+- Phi-4-Reasoning 15B -- excluded for speed (7.9 tok/s), not memory.
+- Zyphra ZAYA1-8B -- excluded: hybrid-Mamba MoE, no working llama.cpp path
+  (official deploy is a custom vLLM fork), text-only.

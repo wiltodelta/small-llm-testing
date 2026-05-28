@@ -62,17 +62,13 @@ MODELS: list[ModelConfig] = [
         name="gemma-4-e4b-Q4_K_M",
         hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-e4b-it-Q4_K_M.gguf",
     ),
-    # Qwen 3.6 27B dense (Alibaba, April 2026) -- DISABLED on M4 16GB.
-    # Tested with UD-Q2_K_XL (~11.8 GB) + ctx=4096 + q4_0 KV cache: caused a kernel
-    # panic / forced reboot during model load. Apple GPU recommendedMaxWorkingSetSize
-    # is only 12.7 GB on this machine, so the 27B class doesn't fit. Same pattern as
-    # Gemma 4 26B-A4B (~15 GB) which also OOM'd.
-    # ModelConfig(
-    #     name="qwen3.6-27b-UD-Q2_K_XL",
-    #     hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-UD-Q2_K_XL.gguf",
-    #     temperature=0.6, top_p=0.95, top_k=20,
-    #     server_args=("-c", "4096", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0"),
-    # ),
+    # Gemma 4 26B-A4B MoE (Google) -- 26B total / 4B active. Q4_K_M ~16.8 GB + mmproj
+    # ~0.8 GB. Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set.
+    # Gemma has no thinking mode. Default ctx (16384, q8_0 KV) leaves ~7 GB headroom.
+    ModelConfig(
+        name="gemma-4-26b-a4b-Q4_K_M",
+        hf="ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf",
+    ),
     # Qwen 3.5 small (Alibaba, March 2026) -- thinking mode on by default.
     # Thinking-on params: temp=0.6, top_p=0.95, top_k=20.
     # Thinking-off params: temp=0.7, top_p=0.8, top_k=20 (Qwen team recommendation).
@@ -130,8 +126,9 @@ MODELS: list[ModelConfig] = [
         thinking=False,
         image_min_tokens=1024,
     ),
-    # 9B: model itself ~9.5 GB, leaves <3 GB for KV. Override defaults with smaller ctx.
-    # Keep q8_0 KV (defaults). If still OOM, drop to q4_0 here.
+    # 9B: model ~9.5 GB + default 16384-ctx q8_0 KV (~3 GB) ~= 12.5 GB, well under the
+    # ~25 GB working set. The old -c 8192 override (for the 16 GB machine) is no longer
+    # needed -- run at default ctx.
     ModelConfig(
         name="qwen3.5-9b-Q8_0-think",
         hf="unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q8_0.gguf",
@@ -139,7 +136,6 @@ MODELS: list[ModelConfig] = [
         top_p=0.95,
         top_k=20,
         thinking=True,
-        server_args=("-c", "8192"),
     ),
     ModelConfig(
         name="qwen3.5-9b-Q8_0-nothink",
@@ -148,8 +144,47 @@ MODELS: list[ModelConfig] = [
         top_p=0.8,
         top_k=20,
         thinking=False,
+    ),
+    # Qwen 3.6 27B dense (Alibaba) -- Q4_K_M ~16.8 GB + mmproj ~0.9 GB. Apache-2.0.
+    # Was kernel-panic OOM on the old 16 GB / 12.7 GB-working-set machine; fits the
+    # 32 GB / ~25 GB working set. -c 8192 keeps KV headroom comfortable (model+KV ~20 GB).
+    ModelConfig(
+        name="qwen3.6-27b-Q4_K_M-think",
+        hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        image_min_tokens=1024,
         server_args=("-c", "8192"),
     ),
+    ModelConfig(
+        name="qwen3.6-27b-Q4_K_M-nothink",
+        hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        image_min_tokens=1024,
+        server_args=("-c", "8192"),
+    ),
+    # Qwen 3.6 27B with multi-token prediction (MTP) -- A/B vs the plain -nothink above
+    # to measure the tok/s gain. The MTP head ships embedded in this GGUF (the -MTP repo,
+    # Q4_K_M ~17.1 GB), enabled via `--spec-type draft-mtp` (build 9380, build d205df681).
+    # Vision is OFF: llama.cpp does not yet support --mmproj together with MTP. Keep all
+    # sampling params identical to the plain -nothink so MTP is the only variable.
+    ModelConfig(
+        name="qwen3.6-27b-Q4_K_M-mtp-nothink",
+        hf="unsloth/Qwen3.6-27B-MTP-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        thinking=False,
+        supports_vision=False,
+        server_args=("-c", "8192", "-np", "1", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2"),
+    ),
+    # Qwen 3.6 35B-A3B MoE (UD-Q4_K_M ~22.1 GB) excluded: too marginal on the ~25 GB
+    # working set (model alone is 88% of it). See README "Memory class reference".
 ]
 
 
