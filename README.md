@@ -62,8 +62,8 @@ the bench timing out during cold-start:
 uv run --with huggingface_hub python -c "
 from huggingface_hub import hf_hub_download
 for repo, files in [
-    ('ggml-org/gemma-4-E2B-it-GGUF', ['gemma-4-e2b-it-Q8_0.gguf', 'mmproj-gemma-4-e2b-it-f16.gguf']),
-    ('ggml-org/gemma-4-E4B-it-GGUF', ['gemma-4-e4b-it-Q4_K_M.gguf', 'mmproj-gemma-4-e4b-it-f16.gguf']),
+    ('ggml-org/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf', 'mmproj-gemma-4-E2B-it-Q8_0.gguf']),
+    ('ggml-org/gemma-4-E4B-it-GGUF', ['gemma-4-E4B-it-Q4_K_M.gguf', 'mmproj-gemma-4-E4B-it-Q8_0.gguf']),
     ('unsloth/Qwen3.5-0.8B-GGUF', ['Qwen3.5-0.8B-Q8_0.gguf', 'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-2B-GGUF',   ['Qwen3.5-2B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-4B-GGUF',   ['Qwen3.5-4B-Q8_0.gguf',   'mmproj-F16.gguf']),

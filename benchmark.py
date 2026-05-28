@@ -56,11 +56,11 @@ MODELS: list[ModelConfig] = [
     # Gemma 4 (Google, March 2025) -- recommended: temp=1.0, top_p=0.95, top_k=64
     ModelConfig(
         name="gemma-4-e2b-Q8_0",
-        hf="ggml-org/gemma-4-E2B-it-GGUF:gemma-4-e2b-it-Q8_0.gguf",
+        hf="ggml-org/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf",
     ),
     ModelConfig(
         name="gemma-4-e4b-Q4_K_M",
-        hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-e4b-it-Q4_K_M.gguf",
+        hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf",
     ),
     # Gemma 4 26B-A4B MoE (Google) -- 26B total / 4B active. Q4_K_M ~16.8 GB + mmproj
     # ~0.8 GB. Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set.
