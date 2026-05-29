@@ -8,21 +8,25 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 |-------|-----------|-------|---------|--------------|
 | [Gemma 4 E2B](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF) | 2B effective | Q8_0 | March 2025 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
 | [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF) | 4B effective | Q4_K_M | March 2025 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
-| [Qwen3.5-0.8B](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) | 0.8B | Q8_0 | March 2026 | [Qwen3.5 release](https://qwenlm.github.io/blog/qwen3/) |
-| [Qwen3.5-2B](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 2B | Q8_0 | March 2026 | same |
+| [Qwen3.5-2B](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 2B | Q8_0 | March 2026 | [Qwen3.5 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 4B | Q8_0 | March 2026 | same |
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
 | [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | Q4_K_M (~16.8 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
 | [Qwen 3.6 27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | 27B dense | Q4_K_M (~16.8 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
 
-Each Qwen model is benchmarked twice: with thinking mode on (`-think`, slower
-but better on reasoning) and off (`-nothink`, fast direct answers). Exception:
-Gemma has no thinking mode.
+Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so the
+two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
+productively (it loops on trivial prompts and times out, a net loss vs no-think).
 
-Qwen 3.6 27B gets a third run, `-mtp-nothink`, using the
-[MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) with multi-token
-prediction (`--spec-type draft-mtp`) for an A/B tok/s comparison against plain
-`-nothink`. Vision is off for that run (llama.cpp does not yet support `--mmproj` with MTP).
+Each Qwen model runs the full matrix: **{think, no-think} x {non-MTP, MTP}** = 4 configs.
+
+- `-think` / `-nothink`: thinking mode on (better reasoning, much slower) vs off (fast direct).
+- `-mtp-*`: same model from the [MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF)
+  with multi-token prediction (`--spec-type draft-mtp`) for a tok/s A/B. MTP runs are
+  vision-off (llama.cpp does not yet support `--mmproj` with MTP). MTP heads ship for the
+  whole Qwen 3.5 / 3.6 line.
+
+Gemma has no thinking mode and no MTP head: one config each.
 
 ### Memory class reference
 
@@ -64,13 +68,15 @@ from huggingface_hub import hf_hub_download
 for repo, files in [
     ('ggml-org/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf', 'mmproj-gemma-4-E2B-it-Q8_0.gguf']),
     ('ggml-org/gemma-4-E4B-it-GGUF', ['gemma-4-E4B-it-Q4_K_M.gguf', 'mmproj-gemma-4-E4B-it-Q8_0.gguf']),
-    ('unsloth/Qwen3.5-0.8B-GGUF', ['Qwen3.5-0.8B-Q8_0.gguf', 'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-2B-GGUF',   ['Qwen3.5-2B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-4B-GGUF',   ['Qwen3.5-4B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-9B-GGUF',   ['Qwen3.5-9B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('ggml-org/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-Q4_K_M.gguf', 'mmproj-gemma-4-26B-A4B-it-Q8_0.gguf']),
     ('unsloth/Qwen3.6-27B-GGUF',  ['Qwen3.6-27B-Q4_K_M.gguf', 'mmproj-F16.gguf']),
-    # MTP variant for the A/B tok/s run -- vision off (MTP + mmproj unsupported), no mmproj.
+    # MTP repos (vision-off A/B runs) -- model file only, no mmproj.
+    ('unsloth/Qwen3.5-2B-MTP-GGUF',  ['Qwen3.5-2B-Q8_0.gguf']),
+    ('unsloth/Qwen3.5-4B-MTP-GGUF',  ['Qwen3.5-4B-Q8_0.gguf']),
+    ('unsloth/Qwen3.5-9B-MTP-GGUF',  ['Qwen3.5-9B-Q8_0.gguf']),
     ('unsloth/Qwen3.6-27B-MTP-GGUF', ['Qwen3.6-27B-Q4_K_M.gguf']),
 ]:
     for f in files:
@@ -173,10 +179,10 @@ Per-model context overrides (memory headroom on the ~25 GB working set):
   it loads and serves).
 - Qwen3.5-9B: no override -- runs at default `-c 16384`.
 
-Multi-token prediction (Qwen 3.6 27B `-mtp-nothink`): the MTP head is embedded in
-the MTP GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`
+Multi-token prediction (every Qwen `-mtp-*` run): the MTP head is embedded in the
+`-MTP` GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`
 (llama-server build 9380 / d205df681). `--mmproj` and `-np > 1` are not yet supported
-with MTP, so this run is vision-off and single-stream.
+with MTP, so MTP runs are vision-off and single-stream.
 
 ## Results
 

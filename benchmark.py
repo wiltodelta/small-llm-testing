@@ -52,8 +52,46 @@ class ModelConfig:
     image_min_tokens: int = 0
 
 
+# MTP speculative-decoding flags (build 9380). The MTP head is embedded in the -MTP
+# GGUF; --mmproj is unsupported with MTP, so MTP runs are vision-off and single-stream.
+_MTP_ARGS: tuple[str, ...] = ("-np", "1", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2")
+
+
+def _qwen_matrix(
+    label: str,
+    base_repo: str,
+    mtp_repo: str,
+    gguf: str,
+    extra_args: tuple[str, ...] = (),
+) -> list[ModelConfig]:
+    """Full {think, nothink} x {non-MTP, MTP} matrix for one Qwen model.
+
+    Sampling per Qwen team: thinking on -> temp=0.6/top_p=0.95; off -> 0.7/0.8 (top_k=20).
+    Non-MTP keeps vision on (image_min_tokens=1024); MTP is vision-off + draft-mtp flags.
+    `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
+    """
+
+    def make(thinking: bool, mtp: bool) -> ModelConfig:
+        suffix = "think" if thinking else "nothink"
+        temp, top_p = (0.6, 0.95) if thinking else (0.7, 0.8)
+        return ModelConfig(
+            name=f"{label}-mtp-{suffix}" if mtp else f"{label}-{suffix}",
+            hf=f"{mtp_repo if mtp else base_repo}:{gguf}",
+            temperature=temp,
+            top_p=top_p,
+            top_k=20,
+            thinking=thinking,
+            supports_vision=not mtp,  # --mmproj is unsupported with MTP
+            image_min_tokens=0 if mtp else 1024,
+            server_args=extra_args + _MTP_ARGS if mtp else extra_args,
+        )
+
+    return [make(thinking, mtp) for thinking in (True, False) for mtp in (False, True)]
+
+
 MODELS: list[ModelConfig] = [
-    # Gemma 4 (Google, March 2025) -- recommended: temp=1.0, top_p=0.95, top_k=64
+    # Gemma 4 (Google) -- no thinking mode, no MTP head: a single config each.
+    # temp=1.0, top_p=0.95, top_k=64 (Gemma defaults on ModelConfig).
     ModelConfig(
         name="gemma-4-e2b-Q8_0",
         hf="ggml-org/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf",
@@ -62,129 +100,28 @@ MODELS: list[ModelConfig] = [
         name="gemma-4-e4b-Q4_K_M",
         hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf",
     ),
-    # Gemma 4 26B-A4B MoE (Google) -- 26B total / 4B active. Q4_K_M ~16.8 GB + mmproj
-    # ~0.8 GB. Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set.
-    # Gemma has no thinking mode. Default ctx (16384, q8_0 KV) leaves ~7 GB headroom.
+    # Gemma 4 26B-A4B MoE -- 26B total / 4B active. Q4_K_M ~16.8 GB + mmproj ~0.8 GB.
+    # Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set at default ctx.
     ModelConfig(
         name="gemma-4-26b-a4b-Q4_K_M",
         hf="ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf",
     ),
-    # Qwen 3.5 small (Alibaba, March 2026) -- thinking mode on by default.
-    # Thinking-on params: temp=0.6, top_p=0.95, top_k=20.
-    # Thinking-off params: temp=0.7, top_p=0.8, top_k=20 (Qwen team recommendation).
-    ModelConfig(
-        name="qwen3.5-0.8b-Q8_0-think",
-        hf="unsloth/Qwen3.5-0.8B-GGUF:Qwen3.5-0.8B-Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-        image_min_tokens=1024,
-    ),
-    ModelConfig(
-        name="qwen3.5-0.8b-Q8_0-nothink",
-        hf="unsloth/Qwen3.5-0.8B-GGUF:Qwen3.5-0.8B-Q8_0.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-        image_min_tokens=1024,
-    ),
-    ModelConfig(
-        name="qwen3.5-2b-Q8_0-think",
-        hf="unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-        image_min_tokens=1024,
-    ),
-    ModelConfig(
-        name="qwen3.5-2b-Q8_0-nothink",
-        hf="unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-Q8_0.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-        image_min_tokens=1024,
-    ),
-    ModelConfig(
-        name="qwen3.5-4b-Q8_0-think",
-        hf="unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-        image_min_tokens=1024,
-    ),
-    ModelConfig(
-        name="qwen3.5-4b-Q8_0-nothink",
-        hf="unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-Q8_0.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-        image_min_tokens=1024,
-    ),
-    # 9B: model ~9.5 GB + default 16384-ctx q8_0 KV (~3 GB) ~= 12.5 GB, well under the
-    # ~25 GB working set. The old -c 8192 override (for the 16 GB machine) is no longer
-    # needed -- run at default ctx.
-    ModelConfig(
-        name="qwen3.5-9b-Q8_0-think",
-        hf="unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-    ),
-    ModelConfig(
-        name="qwen3.5-9b-Q8_0-nothink",
-        hf="unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q8_0.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-    ),
-    # Qwen 3.6 27B dense (Alibaba) -- Q4_K_M ~16.8 GB + mmproj ~0.9 GB. Apache-2.0.
-    # Was kernel-panic OOM on the old 16 GB / 12.7 GB-working-set machine; fits the
-    # 32 GB / ~25 GB working set. -c 8192 keeps KV headroom comfortable (model+KV ~20 GB).
-    ModelConfig(
-        name="qwen3.6-27b-Q4_K_M-think",
-        hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-        image_min_tokens=1024,
-        server_args=("-c", "8192"),
-    ),
-    ModelConfig(
-        name="qwen3.6-27b-Q4_K_M-nothink",
-        hf="unsloth/Qwen3.6-27B-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-        image_min_tokens=1024,
-        server_args=("-c", "8192"),
-    ),
-    # Qwen 3.6 27B with multi-token prediction (MTP) -- A/B vs the plain -nothink above
-    # to measure the tok/s gain. The MTP head ships embedded in this GGUF (the -MTP repo,
-    # Q4_K_M ~17.1 GB), enabled via `--spec-type draft-mtp` (build 9380, build d205df681).
-    # Vision is OFF: llama.cpp does not yet support --mmproj together with MTP. Keep all
-    # sampling params identical to the plain -nothink so MTP is the only variable.
-    ModelConfig(
-        name="qwen3.6-27b-Q4_K_M-mtp-nothink",
-        hf="unsloth/Qwen3.6-27B-MTP-GGUF:Qwen3.6-27B-Q4_K_M.gguf",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        thinking=False,
-        supports_vision=False,
-        server_args=("-c", "8192", "-np", "1", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2"),
+    # Qwen full matrix: {think, nothink} x {non-MTP, MTP}, 4 configs each.
+    # Qwen3.5 small (Q8_0) fits at default ctx; Qwen 3.6 27B (Q4_K_M ~16.8 GB) uses -c 8192.
+    # 0.8B dropped: too small to think productively (loops/timeouts, net loss). The MTP
+    # heads ship in the -MTP repos for the whole Qwen 3.5/3.6 line.
+    *_qwen_matrix("qwen3.5-2b-Q8_0", "unsloth/Qwen3.5-2B-GGUF", "unsloth/Qwen3.5-2B-MTP-GGUF", "Qwen3.5-2B-Q8_0.gguf"),
+    *_qwen_matrix("qwen3.5-4b-Q8_0", "unsloth/Qwen3.5-4B-GGUF", "unsloth/Qwen3.5-4B-MTP-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
+    *_qwen_matrix("qwen3.5-9b-Q8_0", "unsloth/Qwen3.5-9B-GGUF", "unsloth/Qwen3.5-9B-MTP-GGUF", "Qwen3.5-9B-Q8_0.gguf"),
+    *_qwen_matrix(
+        "qwen3.6-27b-Q4_K_M",
+        "unsloth/Qwen3.6-27B-GGUF",
+        "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "Qwen3.6-27B-Q4_K_M.gguf",
+        extra_args=("-c", "8192"),
     ),
     # Qwen 3.6 35B-A3B MoE (UD-Q4_K_M ~22.1 GB) excluded: too marginal on the ~25 GB
-    # working set (model alone is 88% of it). See README "Memory class reference".
+    # working set (88% of it, even tighter with f16 KV). See README "Memory class reference".
 ]
 
 
