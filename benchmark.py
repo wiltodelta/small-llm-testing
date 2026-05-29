@@ -684,7 +684,12 @@ def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
 # Best-practice defaults for Apple Silicon Metal + Qwen3 family.
 # -ngl 99: full GPU offload (no-op safety on Apple). -fa on: flash attention (Metal-supported).
 # -ub 1024: larger ubatch speeds up prompt processing for vision/long prompts.
-# --cache-type-k/v q8_0: ~50% KV cut at near-zero quality cost (fa required for quantized KV).
+# KV cache is left at the f16 default. On the 32 GB machine all models (incl. 27B at
+# -c 8192 and gemma-26b at -c 16384) fit with f16 KV, and f16 is measurably faster than
+# the old q8_0 KV: llama-bench on Qwen3.6-27B Q4_K_M (M5, build 9380) gave tg128 6.32 t/s
+# (f16/f16) vs 3.72 t/s (q8_0/q8_0) -- 1.7x. Quantized K on Metal is especially costly.
+# q8_0 KV was a 16 GB-machine memory hack; drop it here. (fa stays on -- it helps with
+# f16 KV too, and is required only IF KV is quantized.)
 DEFAULT_SERVER_ARGS: tuple[str, ...] = (
     "-ngl",
     "99",
@@ -694,10 +699,6 @@ DEFAULT_SERVER_ARGS: tuple[str, ...] = (
     "1024",
     "-c",
     "16384",
-    "--cache-type-k",
-    "q8_0",
-    "--cache-type-v",
-    "q8_0",
 )
 
 

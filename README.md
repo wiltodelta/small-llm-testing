@@ -146,16 +146,32 @@ Each model uses vendor-recommended parameters; see `MODELS` in `benchmark.py`:
 ## Server flags applied to all models
 
 ```
--ngl 99 -fa on -ub 1024 -c 16384 --cache-type-k q8_0 --cache-type-v q8_0
+-ngl 99 -fa on -ub 1024 -c 16384
 ```
+
+KV cache is left at the **f16 default**, not quantized. On the 32 GB machine every
+model fits with f16 KV, and f16 is measurably faster than q8_0 KV. Measured on this M5
+(llama-bench, Qwen3.6-27B Q4_K_M, build 9380):
+
+| KV type (k/v) | tg128 (decode t/s) | pp256 (prompt t/s) |
+|---|---|---|
+| **f16 / f16** | **6.32** | **156** |
+| f16 / q8_0 | 5.08 | 114 |
+| q8_0 / q8_0 (old default) | 3.72 | 96 |
+| q8_0 / f16 | 3.41 | 76 |
+
+f16 KV is ~1.7x faster decode than the old `q8_0/q8_0` -- quantized K on Metal is
+especially costly. `q8_0` KV was a 16 GB-machine memory hack and is no longer used.
+`-fa on` stays (it helps with f16 KV too; it is only *required* when KV is quantized).
 
 For Qwen vision: additional `--image-min-tokens 1024` (forces enough visual tokens for
 chart/OCR reading -- Gemma's mmproj rejects this flag and gets it omitted).
 
 Per-model context overrides (memory headroom on the ~25 GB working set):
 
-- Qwen 3.6 27B: `-c 8192` (model + KV ~20 GB).
-- Qwen3.5-9B: no override -- runs at default `-c 16384` (model + KV ~12.5 GB).
+- Qwen 3.6 27B: `-c 8192` (keeps f16 KV comfortably within the working set; verified
+  it loads and serves).
+- Qwen3.5-9B: no override -- runs at default `-c 16384`.
 
 Multi-token prediction (Qwen 3.6 27B `-mtp-nothink`): the MTP head is embedded in
 the MTP GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`

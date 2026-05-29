@@ -46,7 +46,10 @@ so a closed lid doesn't kill them.
     `--spec-type draft-mtp --spec-draft-n-max 2 -np 1` for the 27B MTP A/B run --
     MTP needs `supports_vision=False` since `--mmproj` is unsupported with MTP)
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
-  `-ngl 99 -fa on -ub 1024 -c 16384 --cache-type-k q8_0 --cache-type-v q8_0`
+  `-ngl 99 -fa on -ub 1024 -c 16384`. KV cache stays at the f16 default (NOT q8_0):
+  on 32 GB everything fits, and f16 KV is ~1.7x faster decode than q8_0 on this M5
+  (llama-bench Qwen3.6-27B: 6.32 vs 3.72 tg t/s). Quantized K on Metal is costly.
+  q8_0 KV was a 16 GB-machine memory hack -- do not re-add it.
 - llama-server binary: `/opt/homebrew/bin/llama-server`
 - `REQUEST_TIMEOUT = 120` -- thinking models loop on translation prompts; fail fast
 - `DEFAULT_N_RUNS = 3` -- each prompt sampled this many times to average out temperature
