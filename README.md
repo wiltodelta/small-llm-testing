@@ -123,19 +123,25 @@ disown
 After each model the bench writes `results/benchmark.<model>.json` so a crash
 mid-run does not lose prior results.
 
-## Test set (16 prompts, 7 categories)
+## Test set (9 prompts, discriminating core)
 
 Each prompt is sampled `n=3` times at temperature > 0; we report passes/n.
-Verifiers go beyond substring matching:
+Trimmed from the original 16 to a **discriminating core**: prompts that every model
+passed (simple division/percent, the easy syllogism, `total()` sum, the two
+translations) and the brittle substring-matched `summarize` were dropped -- they
+sat at the ceiling and added no signal. What remains actually separates models:
 
 | Category | Prompts | Verifier type |
 |----------|---------|---------------|
-| math | math_mul (23x17), math_div (144/12), math_percent (15% of 80) | numeric with tolerance |
-| reasoning | word_speed (multi-step), word_age (algebra), 3 syllogisms | numeric / yes-no first-token |
-| coding | code_total (sum), code_fizzbuzz | **executes the code** against test cases via subprocess |
-| language | summarize (must include 'language model') | regex |
-| translation | translate_fr_hello, translate_es_thanks | regex covering valid alternatives |
+| math | math_mul (23x17) | numeric with tolerance |
+| reasoning | word_speed (multi-step), word_age (algebra), logic_syllogism_no (real-world override trap), logic_negation | numeric / yes-no first-token |
+| coding | code_fizzbuzz | **executes the code** against test cases via subprocess |
 | vision | vision_max, vision_min, vision_diff (bar chart Q1-Q4) | numeric with tolerance |
+
+**Per-category thinking.** Even a `-think` config enables thinking only for
+`math`/`reasoning`/`coding` (`THINKING_CATEGORIES` in `benchmark.py`); `vision` runs
+direct. Thinking on short-answer prompts only loops and burns the request timeout for
+no accuracy gain, so it is gated off there.
 
 ## Sampling parameters
 
@@ -187,6 +193,21 @@ with MTP, so MTP runs are vision-off and single-stream.
 ## Results
 
 See `results/COMPARISON.md` for the full table and per-model breakdown.
+
+**Reading the numbers:**
+
+- **Fails are split `wrong/timeout/empty`.** A timeout means the answer ran past
+  `REQUEST_TIMEOUT` (120s) -- too slow to finish, not a wrong answer. This matters for
+  big think-mode configs: e.g. 27B-think scores low mostly on timeouts (long reasoning
+  traces at a few tok/s), which is a speed limit, not a reasoning failure.
+- **Speed vs accuracy are separate concerns.** Absolute `tok/s` from a long full-suite
+  run is depressed by thermal throttling that accumulates over hours (early configs run
+  cooler/faster than late ones). For true peak decode speed, measure one model on a cool
+  machine with `llama-bench`, not the tail of a multi-hour suite. The suite's tok/s is
+  fine for *relative* comparisons measured back-to-back (MTP on/off, think/no-think).
+- **MTP vs non-MTP accuracy** must be compared on the shared non-vision prompts only:
+  MTP runs are vision-off (`/39` attempts) while non-MTP includes vision (`/48`), so the
+  raw pass totals are not directly comparable -- the gap is the missing vision prompts.
 
 ### Summary on M4 16GB, n=3 (April 2026 baseline -- prior 16 GB machine)
 

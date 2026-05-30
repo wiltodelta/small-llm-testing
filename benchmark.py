@@ -155,22 +155,6 @@ def _strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
-def v_keyword(*needles: str) -> Verifier:
-    """All needles must appear as case-insensitive substrings in the trimmed answer."""
-
-    def check(text: str) -> tuple[bool, str]:
-        ans = _strip_think(text)
-        if not ans:
-            return False, "empty"
-        low = ans.lower()
-        for needle in needles:
-            if needle.lower() not in low:
-                return False, f"missing {needle!r}"
-        return True, ""
-
-    return check
-
-
 def v_regex(pattern: str, *, flags: int = re.IGNORECASE) -> Verifier:
     """Answer must match the given regex (re.search semantics)."""
     rx = re.compile(pattern, flags)
@@ -314,25 +298,19 @@ _VISION_MIN_PLACEHOLDER: list[dict[str, object]] = []
 _VISION_DIFF_PLACEHOLDER: list[dict[str, object]] = []
 
 
+# Discriminating core only. Trivial prompts that every model passes (math_div,
+# math_percent, logic_syllogism_yes, code_total, translate_fr/es) and the brittle
+# substring-matched summarize were dropped -- they added no signal and inflated
+# scores toward the ceiling. What remains actually separates models: non-trivial
+# arithmetic, multi-step word problems, a real-world-override logic trap, executed
+# code, and chart OCR.
 PROMPTS: list[Prompt] = [
-    # ---- arithmetic / math (3 problems) ----
+    # ---- arithmetic (non-trivial multiplication) ----
     Prompt(
         name="math_mul",
         category="math",
         messages=_user("What is 23 multiplied by 17? Reply with only the number."),
         verify=v_number(391),
-    ),
-    Prompt(
-        name="math_div",
-        category="math",
-        messages=_user("What is 144 divided by 12? Reply with only the number."),
-        verify=v_number(12),
-    ),
-    Prompt(
-        name="math_percent",
-        category="math",
-        messages=_user("What is 15% of 80? Reply with only the number."),
-        verify=v_number(12),
     ),
     # ---- word problems (multi-step reasoning) ----
     Prompt(
@@ -355,13 +333,7 @@ PROMPTS: list[Prompt] = [
         # Alice now = 20, Bob = 10
         verify=v_number(10),
     ),
-    # ---- logic (yes-bias trap: include 'no' answer) ----
-    Prompt(
-        name="logic_syllogism_yes",
-        category="reasoning",
-        messages=_user("All cats are mammals. Tom is a cat. Is Tom a mammal? Answer with one word: yes or no."),
-        verify=v_yes_no(want_yes=True),
-    ),
+    # ---- logic (real-world-knowledge override trap) ----
     Prompt(
         name="logic_syllogism_no",
         category="reasoning",
@@ -385,22 +357,6 @@ PROMPTS: list[Prompt] = [
     ),
     # ---- coding (executed against test cases) ----
     Prompt(
-        name="code_total",
-        category="coding",
-        messages=_user(
-            "Write a Python function named `total` that takes a list of integers "
-            "and returns their sum. Reply with code only, in a single ```python``` block."
-        ),
-        verify=v_python_exec(
-            [
-                ("total([1, 2, 3])", 6),
-                ("total([])", 0),
-                ("total([-5, 5])", 0),
-                ("total([10])", 10),
-            ]
-        ),
-    ),
-    Prompt(
         name="code_fizzbuzz",
         category="coding",
         messages=_user(
@@ -418,35 +374,6 @@ PROMPTS: list[Prompt] = [
                 ("fizzbuzz(30)", "FizzBuzz"),
             ]
         ),
-    ),
-    # ---- summarization (must mention key term, must be short) ----
-    Prompt(
-        name="summarize",
-        category="language",
-        messages=_user(
-            "Summarize the following in one sentence under 30 words: "
-            "Large language models are trained on vast amounts of text data using "
-            "self-supervised learning. They predict the next token in a sequence, "
-            "which allows them to learn grammar, facts, and reasoning abilities."
-        ),
-        verify=v_keyword("language model"),
-    ),
-    # ---- translation (idiomatic, multiple acceptable forms) ----
-    Prompt(
-        name="translate_fr_hello",
-        category="language",
-        messages=_user(
-            "Translate the English greeting 'hello' to French. "
-            "Reply with only the French word, no punctuation, no quotes."
-        ),
-        # Bonjour, Salut, both acceptable.
-        verify=v_regex(r"\b(bonjour|salut)\b"),
-    ),
-    Prompt(
-        name="translate_es_thanks",
-        category="language",
-        messages=_user("Translate 'thank you' to Spanish. Reply with only the Spanish word or phrase."),
-        verify=v_regex(r"\bgracias\b"),
     ),
     # ---- vision (3 different questions on same chart) ----
     Prompt(
@@ -683,12 +610,18 @@ def _stop_server(proc: subprocess.Popen[bytes]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int) -> tuple[str, int, float]:
-    """Send a chat completion request. Returns (response_text, token_count, elapsed_s)."""
+def _chat(
+    messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, *, thinking: bool
+) -> tuple[str, int, float]:
+    """Send a chat completion request. Returns (response_text, token_count, elapsed_s).
+
+    `thinking` is the effective per-request decision (see `_thinks` for the per-category
+    gate), not necessarily `model_cfg.thinking`.
+    """
     api_url = API_URL.format(port=port)
     # Qwen3 thinking mode needs much more headroom: official guidance is up to 32k for
     # general tasks, 80k+ for math/code. 4k overflows even the 0.8B inside <think>.
-    max_tokens = 16384 if model_cfg.thinking else 4096
+    max_tokens = 16384 if thinking else 4096
     req_body: dict[str, object] = {
         "messages": messages,
         "max_tokens": max_tokens,
@@ -698,7 +631,7 @@ def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int) 
         # Qwen team recommendation: explicitly pin min_p=0 (server default may clip the tail).
         "min_p": 0,
     }
-    if not model_cfg.thinking:
+    if not thinking:
         req_body["chat_template_kwargs"] = {"enable_thinking": False}
     payload = json.dumps(req_body, ensure_ascii=False).encode()
 
@@ -723,9 +656,21 @@ def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int) 
 # ---------------------------------------------------------------------------
 
 
+# Thinking only helps on multi-step work; on short-answer categories (vision chart
+# reads) it loops and burns the request timeout for no accuracy gain. So even a -think
+# config thinks ONLY on these categories; everything else runs direct.
+THINKING_CATEGORIES: frozenset[str] = frozenset({"math", "reasoning", "coding"})
+
+
+def _thinks(model_cfg: ModelConfig, prompt: Prompt) -> bool:
+    """Effective thinking for this (model, prompt): the config must enable it AND the
+    prompt's category must be one where thinking pays off."""
+    return model_cfg.thinking and prompt.category in THINKING_CATEGORIES
+
+
 def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attempt:
     try:
-        text, tokens, elapsed = _chat(prompt.messages, model_cfg, port)
+        text, tokens, elapsed = _chat(prompt.messages, model_cfg, port, thinking=_thinks(model_cfg, prompt))
     except Exception as e:
         log.warning("    api error: %s", e)
         return Attempt(tokens=0, time_s=0.0, response="", ok=False, fail_reason=f"api error: {type(e).__name__}")
@@ -878,6 +823,18 @@ def _save_json(results: list[ModelResult]) -> Path:
     return path
 
 
+def _fail_kind(reason: str) -> str:
+    """Classify a failed attempt so 'too slow' is not conflated with 'wrong answer':
+    'timeout' (ran past REQUEST_TIMEOUT), 'empty' (no usable output / api error),
+    or 'wrong' (finished but the verifier rejected the answer)."""
+    low = reason.lower()
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    if reason == "empty" or low.startswith("api error"):
+        return "empty"
+    return "wrong"
+
+
 def _save_markdown(results: list[ModelResult]) -> Path:
     path = RESULTS_DIR / "RESULTS.md"
     lines: list[str] = [
@@ -887,15 +844,19 @@ def _save_markdown(results: list[ModelResult]) -> Path:
         "",
         "Each prompt sampled multiple times; cell shows passes/n.",
         "Wall-clock total = sum of all attempt times. tok/s computed only over attempts >=50 tokens.",
+        "Fails split as wrong/timeout/empty -- a timeout is too-slow-to-finish, not a wrong answer.",
         "",
         "## Summary",
         "",
-        "| Model | Passes | Total time | tok/s (gen, long-only) |",
-        "|---|---|---|---|",
+        "| Model | Passes | Fails (wrong/timeout/empty) | Total time | tok/s (gen, long-only) |",
+        "|---|---|---|---|---|",
     ]
     for r in results:
+        fails = [_fail_kind(a.fail_reason) for p in r.prompts for a in p.attempts if not a.ok]
+        w, t, e = (fails.count("wrong"), fails.count("timeout"), fails.count("empty"))
         lines.append(
-            f"| {r.model_name} | {r.passes}/{r.attempts_total} | {r.total_time_s:.1f}s | {r.gen_tok_per_s:.1f} |"
+            f"| {r.model_name} | {r.passes}/{r.attempts_total} | {w}/{t}/{e} | "
+            f"{r.total_time_s:.1f}s | {r.gen_tok_per_s:.1f} |"
         )
     lines.append("")
 

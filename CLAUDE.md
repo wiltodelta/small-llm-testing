@@ -32,7 +32,7 @@ so a closed lid doesn't kill them.
   Note: `set -e` makes the whole script abort at `uv-secure` if any dependency has a
   CVE, before reaching ruff/pyright. To validate code edits when an unrelated transitive
   CVE blocks it, run directly: `uv run ruff check && uv run ruff format --check && uv run pyright`.
-- `benchmark.py` -- starts llama-server per model, runs 16 prompts x N samples,
+- `benchmark.py` -- starts llama-server per model, runs 9 prompts x N samples,
   saves per-model and aggregated results
 - `generate_test_image.py` -- creates `assets/test_chart.png` for vision prompts
 
@@ -56,16 +56,28 @@ so a closed lid doesn't kill them.
 
 ## Test set
 
-16 prompts across 7 categories (math, reasoning, coding, language, translation, vision).
-Verifiers replace substring matching with:
+9 prompts (discriminating core) across 4 categories: math (1), reasoning (4),
+coding (1), vision (3). Trimmed from the original 16 -- trivial prompts that every
+model passed (math_div, math_percent, logic_syllogism_yes, code_total, both
+translations) and the brittle substring `summarize` were dropped (no signal, ceiling).
+Verifiers:
 
 - `v_number(expected, tol)` -- finds any decimal in answer matching expected within tolerance
 - `v_yes_no(want_yes)` -- first yes/no token must match (catches "yes, but actually no")
-- `v_regex(pattern)` -- regex search
+- `v_regex(pattern)` -- regex search (kept for future prompts; no core prompt uses it now)
 - `v_python_exec(test_cases)` -- extracts Python from `\`\`\`python\`\`\`` block, runs it
   in a subprocess, asserts each `(call_expr, expected_value)` returns expected
 
 `_strip_think(text)` removes `<think>...</think>` blocks before verification.
+
+**Per-category thinking:** `_thinks(cfg, prompt)` gates thinking to
+`THINKING_CATEGORIES` (math/reasoning/coding). Even a `-think` config runs `vision`
+direct -- thinking on short-answer prompts only loops and hits `REQUEST_TIMEOUT`.
+
+**Fail classification:** `_fail_kind` splits failures into `wrong` / `timeout` /
+`empty` so the summary table never conflates "too slow to finish" with "wrong answer".
+Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
+cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
 
 ## Result files
 
