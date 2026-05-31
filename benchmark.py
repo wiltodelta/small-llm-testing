@@ -120,6 +120,46 @@ MODELS: list[ModelConfig] = [
         "Qwen3.6-27B-Q4_K_M.gguf",
         extra_args=("-c", "8192"),
     ),
+    # Other families -- single instruct config each (no Qwen-style enable_thinking toggle,
+    # no MTP head). Sampling from each model card where given, else neutral defaults
+    # (temp>0 so the n=3 sampling actually varies).
+    # Mistral Ministral 3 (Apache-2.0) -- multimodal (Pixtral-style mmproj). Card: temp<0.1
+    # for production; top_p/top_k unspecified, left neutral. mmproj is auto-resolved.
+    ModelConfig(
+        name="ministral-3-8b-Q8_0",
+        hf="mistralai/Ministral-3-8B-Instruct-2512-GGUF:Ministral-3-8B-Instruct-2512-Q8_0.gguf",
+        temperature=0.15,
+        top_p=1.0,
+        top_k=0,
+    ),
+    ModelConfig(
+        name="ministral-3-14b-Q4_K_M",
+        hf="mistralai/Ministral-3-14B-Instruct-2512-GGUF:Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
+        temperature=0.15,
+        top_p=1.0,
+        top_k=0,
+    ),
+    # Microsoft Phi-4-mini-instruct (MIT, text-only, standard instruct -- not reasoning).
+    # Card gives no sampling rec; neutral defaults.
+    ModelConfig(
+        name="phi-4-mini-Q8_0",
+        hf="unsloth/Phi-4-mini-instruct-GGUF:Phi-4-mini-instruct.Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.95,
+        top_k=64,
+        supports_vision=False,
+    ),
+    # Zhipu GLM-4.7-Flash (MIT, text-only) -- 30B-A3B MoE (3B active, so fast despite size).
+    # Q4_K_M ~18.3 GB; -c 8192 keeps f16 KV in the working set. Card: temp=1.0, top_p=0.95.
+    ModelConfig(
+        name="glm-4.7-flash-Q4_K_M",
+        hf="unsloth/GLM-4.7-Flash-GGUF:GLM-4.7-Flash-Q4_K_M.gguf",
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        supports_vision=False,
+        server_args=("-c", "8192"),
+    ),
     # Qwen 3.6 35B-A3B MoE (UD-Q4_K_M ~22.1 GB) excluded: too marginal on the ~25 GB
     # working set (88% of it, even tighter with f16 KV). See README "Memory class reference".
 ]
@@ -514,7 +554,9 @@ def _resolve_local_paths(hf_spec: str) -> tuple[Path, Path | None] | None:
                 mmproj = cand
                 break
         if mmproj is None:
-            mmproj = next(iter(snap.glob("mmproj*.gguf")), None)
+            # Match both leading (mmproj-F16.gguf, Qwen/Gemma) and trailing
+            # (Ministral-...-BF16-mmproj.gguf, Mistral) projector names.
+            mmproj = next(iter(snap.glob("*mmproj*.gguf")), None)
         if mmproj is not None:
             return model_path, mmproj
         if best is None:

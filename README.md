@@ -13,6 +13,10 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
 | [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | Q4_K_M (~16.8 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
 | [Qwen 3.6 27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | 27B dense | Q4_K_M (~16.8 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
+| [Ministral 3 8B](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) | 8B (+vision) | Q8_0 (~9 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
+| [Ministral 3 14B](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF) | 14B (+vision) | Q4_K_M (~8.2 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
+| [Phi-4-mini](https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF) | 3.8B | Q8_0 (~4 GB) | 2026 | Microsoft (MIT) |
+| [GLM-4.7-Flash](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | 30B-A3B MoE (3B active) | Q4_K_M (~18.3 GB) | 2026 | Zhipu (MIT) |
 
 Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so the
 two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
@@ -26,7 +30,10 @@ Each Qwen model runs the full matrix: **{think, no-think} x {non-MTP, MTP}** = 4
   vision-off (llama.cpp does not yet support `--mmproj` with MTP). MTP heads ship for the
   whole Qwen 3.5 / 3.6 line.
 
-Gemma has no thinking mode and no MTP head: one config each.
+Gemma has no thinking mode and no MTP head: one config each. The other families
+(Ministral 3, Phi-4-mini, GLM-4.7-Flash) likewise run one instruct config each -- no
+Qwen-style `enable_thinking` toggle and no MTP head. Ministral 3 is multimodal, so it
+exercises the vision prompts; Phi-4-mini and GLM-4.7-Flash are text-only.
 
 ### Memory class reference
 
@@ -78,6 +85,11 @@ for repo, files in [
     ('unsloth/Qwen3.5-4B-MTP-GGUF',  ['Qwen3.5-4B-Q8_0.gguf']),
     ('unsloth/Qwen3.5-9B-MTP-GGUF',  ['Qwen3.5-9B-Q8_0.gguf']),
     ('unsloth/Qwen3.6-27B-MTP-GGUF', ['Qwen3.6-27B-Q4_K_M.gguf']),
+    # Other families. Ministral is multimodal (Pixtral-style mmproj); Phi/GLM text-only.
+    ('mistralai/Ministral-3-8B-Instruct-2512-GGUF',  ['Ministral-3-8B-Instruct-2512-Q8_0.gguf', 'Ministral-3-8B-Instruct-2512-BF16-mmproj.gguf']),
+    ('mistralai/Ministral-3-14B-Instruct-2512-GGUF', ['Ministral-3-14B-Instruct-2512-Q4_K_M.gguf', 'Ministral-3-14B-Instruct-2512-BF16-mmproj.gguf']),
+    ('unsloth/Phi-4-mini-instruct-GGUF', ['Phi-4-mini-instruct.Q8_0.gguf']),
+    ('unsloth/GLM-4.7-Flash-GGUF', ['GLM-4.7-Flash-Q4_K_M.gguf']),
 ]:
     for f in files:
         hf_hub_download(repo, f)
