@@ -190,6 +190,25 @@ Multi-token prediction (every Qwen `-mtp-*` run): the MTP head is embedded in th
 (llama-server build 9380 / d205df681). `--mmproj` and `-np > 1` are not yet supported
 with MTP, so MTP runs are vision-off and single-stream.
 
+## Findings
+
+Qualitative conclusions (current numbers live in `results/COMPARISON.md`, regenerated
+each run -- not duplicated here):
+
+- **Best small-footprint model: Gemma 4 26B-A4B.** Top accuracy on the core set at a
+  fraction of dense-27B cost (MoE, ~4B active) and fits the 32 GB working set.
+- **Thinking helps small/mid Qwen (2B-9B), not the slow 27B.** With per-category gating
+  (thinking only on math/reasoning/coding), `-think` beats `-nothink` on 2B/4B/9B. On
+  27B, `-think` loses -- but almost entirely on *timeouts*: long reasoning traces don't
+  finish within the 120s cap at a few tok/s. That's a speed limit, not a reasoning failure.
+- **MTP pays off most on 4B-9B.** Multi-token-prediction speculative decoding gives the
+  largest tok/s gains in the mid range; it's marginal on 2B and on the 27B. Accuracy is
+  unchanged (compared on shared non-vision prompts).
+- **f16 KV cache, not q8_0.** On 32 GB the f16 default fits every model and decodes
+  ~1.7x faster than the old q8_0 KV hack (llama-bench, 27B). Quantized K on Metal is costly.
+- **Speed numbers are throttling-sensitive.** Long suite runs throttle thermally; treat
+  the suite's tok/s as relative and measure peak with `llama-bench` on a cool machine.
+
 ## Results
 
 See `results/COMPARISON.md` for the full table and per-model breakdown.
