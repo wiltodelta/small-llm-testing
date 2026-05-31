@@ -33,7 +33,10 @@ so a closed lid doesn't kill them.
   CVE, before reaching ruff/pyright. To validate code edits when an unrelated transitive
   CVE blocks it, run directly: `uv run ruff check && uv run ruff format --check && uv run pyright`.
 - `benchmark.py` -- starts llama-server per model, runs 9 prompts x N samples,
-  saves per-model and aggregated results
+  saves per-model and aggregated results (`benchmark.json` + `RESULTS.md`)
+- `make_comparison.py` -- regenerates `results/COMPARISON.md` (think vs no-think, MTP
+  speedup by size, fail breakdown) from `benchmark.json`. Run after a benchmark; numbers
+  are read from the data, never hand-typed.
 - `generate_test_image.py` -- creates `assets/test_chart.png` for vision prompts
 
 ## Configuration

@@ -823,7 +823,7 @@ def _save_json(results: list[ModelResult]) -> Path:
     return path
 
 
-def _fail_kind(reason: str) -> str:
+def fail_kind(reason: str) -> str:
     """Classify a failed attempt so 'too slow' is not conflated with 'wrong answer':
     'timeout' (ran past REQUEST_TIMEOUT), 'empty' (no usable output / api error),
     or 'wrong' (finished but the verifier rejected the answer)."""
@@ -852,7 +852,7 @@ def _save_markdown(results: list[ModelResult]) -> Path:
         "|---|---|---|---|---|",
     ]
     for r in results:
-        fails = [_fail_kind(a.fail_reason) for p in r.prompts for a in p.attempts if not a.ok]
+        fails = [fail_kind(a.fail_reason) for p in r.prompts for a in p.attempts if not a.ok]
         w, t, e = (fails.count("wrong"), fails.count("timeout"), fails.count("empty"))
         lines.append(
             f"| {r.model_name} | {r.passes}/{r.attempts_total} | {w}/{t}/{e} | "
