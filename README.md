@@ -12,6 +12,7 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 | [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 4B | Q8_0 | March 2026 | same |
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
 | [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | Q4_K_M (~16.8 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 31B](https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf) | 31B dense (+vision) | QAT q4_0 (~17.7 GB) | 2026 | Google (Apache-2.0), official QAT GGUF |
 | [Qwen 3.6 27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | 27B dense | Q4_K_M (~16.8 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Ministral 3 8B](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) | 8B (+vision) | Q8_0 (~9 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
 | [Ministral 3 14B](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF) | 14B (+vision) | Q4_K_M (~8.2 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
@@ -79,6 +80,7 @@ for repo, files in [
     ('unsloth/Qwen3.5-4B-GGUF',   ['Qwen3.5-4B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('unsloth/Qwen3.5-9B-GGUF',   ['Qwen3.5-9B-Q8_0.gguf',   'mmproj-F16.gguf']),
     ('ggml-org/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-Q4_K_M.gguf', 'mmproj-gemma-4-26B-A4B-it-Q8_0.gguf']),
+    ('google/gemma-4-31B-it-qat-q4_0-gguf', ['gemma-4-31B_q4_0-it.gguf', 'gemma-4-31B-it-mmproj.gguf']),
     ('unsloth/Qwen3.6-27B-GGUF',  ['Qwen3.6-27B-Q4_K_M.gguf', 'mmproj-F16.gguf']),
     # MTP repos (vision-off A/B runs) -- model file only, no mmproj.
     ('unsloth/Qwen3.5-2B-MTP-GGUF',  ['Qwen3.5-2B-Q8_0.gguf']),
@@ -193,9 +195,9 @@ chart/OCR reading -- Gemma's mmproj rejects this flag and gets it omitted).
 
 Per-model context overrides (memory headroom on the ~25 GB working set):
 
-- Qwen 3.6 27B: `-c 8192` (keeps f16 KV comfortably within the working set; verified
-  it loads and serves).
-- Qwen3.5-9B: no override -- runs at default `-c 16384`.
+- The ~18 GB models (Qwen 3.6 27B, GLM-4.7-Flash, Gemma 4 31B): `-c 8192` to keep f16
+  KV comfortably within the working set.
+- Everything smaller: default `-c 16384`.
 
 Multi-token prediction (every Qwen `-mtp-*` run): the MTP head is embedded in the
 `-MTP` GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`

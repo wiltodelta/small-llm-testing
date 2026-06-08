@@ -106,6 +106,14 @@ MODELS: list[ModelConfig] = [
         name="gemma-4-26b-a4b-Q4_K_M",
         hf="ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf",
     ),
+    # Gemma 4 31B dense (Google, 2026) -- official QAT q4_0 (~17.7 GB + mmproj 1.2 GB).
+    # QAT (quantization-aware training) is typically more accurate at 4-bit than a
+    # post-hoc Q4_K_M. Vision-capable. -c 8192 keeps f16 KV within the working set.
+    ModelConfig(
+        name="gemma-4-31b-qat-q4_0",
+        hf="google/gemma-4-31B-it-qat-q4_0-gguf:gemma-4-31B_q4_0-it.gguf",
+        server_args=("-c", "8192"),
+    ),
     # Qwen full matrix: {think, nothink} x {non-MTP, MTP}, 4 configs each.
     # Qwen3.5 small (Q8_0) fits at default ctx; Qwen 3.6 27B (Q4_K_M ~16.8 GB) uses -c 8192.
     # 0.8B dropped: too small to think productively (loops/timeouts, net loss). The MTP
