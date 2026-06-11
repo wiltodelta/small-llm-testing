@@ -67,6 +67,10 @@ on the ~25 GB working set it runs at default ctx (model + KV ~12.5 GB).
 brew install llama.cpp
 ```
 
+Use a recent build (≥ 9580): the `mellum` architecture used by Mellum2 was added in
+[PR #23966](https://github.com/ggml-org/llama.cpp/pull/23966) (merged 2026-06-02). Older
+builds fail to start its server with `unknown model architecture: 'mellum'`.
+
 ## Download models first
 
 Models are large (1--10 GB each). Pre-download with `huggingface_hub` to avoid
