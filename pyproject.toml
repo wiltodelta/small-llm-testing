@@ -3,9 +3,7 @@ name = "small-llm-testing"
 version = "0.1.0"
 description = "Benchmark small LLMs locally via llama.cpp on Apple Silicon"
 requires-python = ">=3.12"
-dependencies = [
-    "pillow>=11.0",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
@@ -31,7 +29,6 @@ ignore = [
 "scripts/*.py" = ["G004", "S108", "S310", "T20"]
 "tests/*.py" = ["S105", "S106", "S108"]
 "benchmark.py" = ["S310", "S603"]  # local benchmark: urllib to localhost, subprocess for llama-server
-"generate_test_image.py" = ["ANN"]  # PIL has no type stubs
 
 [tool.ruff.format]
 quote-style = "double"
