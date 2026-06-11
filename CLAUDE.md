@@ -9,9 +9,6 @@ memory, ~24.96 GB GPU working set).
 # Install dependencies
 uv sync
 
-# Generate test chart for vision prompts (only once)
-uv run python generate_test_image.py
-
 # Run full benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
@@ -32,22 +29,19 @@ so a closed lid doesn't kill them.
   Note: `set -e` makes the whole script abort at `uv-secure` if any dependency has a
   CVE, before reaching ruff/pyright. To validate code edits when an unrelated transitive
   CVE blocks it, run directly: `uv run ruff check && uv run ruff format --check && uv run pyright`.
-- `benchmark.py` -- starts llama-server per model, runs 9 prompts x N samples,
+- `benchmark.py` -- starts llama-server per model, runs 6 prompts x N samples,
   saves per-model and aggregated results (`benchmark.json` + `RESULTS.md`)
 - `make_comparison.py` -- regenerates `results/COMPARISON.md` (think vs no-think, MTP
   speedup by size, fail breakdown) from `benchmark.json`. Run after a benchmark; numbers
   are read from the data, never hand-typed.
-- `generate_test_image.py` -- creates `assets/test_chart.png` for vision prompts
 
 ## Configuration
 
 - `MODELS` list in `benchmark.py` defines all configs. Each `ModelConfig` has:
   - `temperature`, `top_p`, `top_k` (vendor-recommended defaults)
   - `thinking: bool` -- toggles `chat_template_kwargs={"enable_thinking": False}` per request
-  - `image_min_tokens` -- Qwen-only; forces visual token floor for OCR/chart accuracy
   - `server_args` -- per-model llama-server overrides (e.g. `-c 8192` for 27B, or
-    `--spec-type draft-mtp --spec-draft-n-max 2 -np 1` for the 27B MTP A/B run --
-    MTP needs `supports_vision=False` since `--mmproj` is unsupported with MTP)
+    `--spec-type draft-mtp --spec-draft-n-max 2 -np 1` for the 27B MTP A/B run)
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
   `-ngl 99 -fa on -ub 1024 -c 16384`. KV cache stays at the f16 default (NOT q8_0):
   on 32 GB everything fits, and f16 KV is ~1.7x faster decode than q8_0 on this M5
@@ -59,11 +53,13 @@ so a closed lid doesn't kill them.
 
 ## Test set
 
-9 prompts (discriminating core) across 4 categories: math (1), reasoning (4),
-coding (1), vision (3). Trimmed from the original 16 -- trivial prompts that every
-model passed (math_div, math_percent, logic_syllogism_yes, code_total, both
-translations) and the brittle substring `summarize` were dropped (no signal, ceiling).
-Verifiers:
+6 text prompts (discriminating core) across 3 categories: math (1), reasoning (4),
+coding (1). Trimmed from the original 16 -- trivial prompts that every model passed
+(math_div, math_percent, logic_syllogism_yes, code_total, both translations) and the
+brittle substring `summarize` were dropped (no signal, ceiling). Vision (3 chart-OCR
+prompts) was removed too: it was supported unevenly across the model set (text-only for
+Qwen-MTP / Phi / GLM / LFM / Mellum, and the Gemma 4 12B QAT mmproj fails to load), and
+the mmproj path was a recurring source of server-start failures. Verifiers:
 
 - `v_number(expected, tol)` -- finds any decimal in answer matching expected within tolerance
 - `v_yes_no(want_yes)` -- first yes/no token must match (catches "yes, but actually no")
@@ -74,10 +70,11 @@ Verifiers:
 `_strip_think(text)` removes `<think>...</think>` blocks before verification.
 
 **Per-category thinking:** `_thinks(cfg, prompt)` gates thinking to
-`THINKING_CATEGORIES` (math/reasoning/coding). Even a `-think` config runs `vision`
-direct -- thinking on short-answer prompts only loops and hits `REQUEST_TIMEOUT`.
+`THINKING_CATEGORIES` (math/reasoning/coding). The current core is entirely these three,
+so the gate is a no-op today -- it stays so short-answer prompts can be re-added without
+a thinking-loop/`REQUEST_TIMEOUT` regression.
 
-**Fail classification:** `_fail_kind` splits failures into `wrong` / `timeout` /
+**Fail classification:** `fail_kind` splits failures into `wrong` / `timeout` /
 `empty` so the summary table never conflates "too slow to finish" with "wrong answer".
 Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
 cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
@@ -94,14 +91,15 @@ cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
 
 - llama-server's `-hf` resolver hangs on some Qwen repos even when files are cached.
   We always start with `-m <local_path>` discovered under `~/.cache/huggingface/hub/`.
-- `--image-min-tokens 1024` is Qwen-only. Gemma 4 mmproj caps image_max_pixels lower
-  and rejects this flag (image_max_pixels < image_min_pixels). Field `image_min_tokens`
-  on ModelConfig is opt-in.
 - Qwen3 thinking-mode loops on trivial prompts (translations, "reply with one word")
   and overflows max_tokens or hits REQUEST_TIMEOUT. Fix: use no-think mode for short
   factual queries; thinking only helps on math/word-problems/code.
 - Stale `python3.1` processes can hold port 8080 after a previous llama-server crashes.
   Check `lsof -i :8080` before starting a new run.
+- Do not run a benchmark concurrently with large model downloads. A ~17 GB model in the
+  GPU working set plus a multi-GB download piling on memory pressure gets llama-server
+  killed by macOS jetsam mid-run (the log cuts off with no traceback). Finish downloads
+  first, then start the run.
 
 ## Memory class (M5, ~24.96 GB working set)
 

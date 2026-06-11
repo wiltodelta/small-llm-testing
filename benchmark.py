@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import re
@@ -24,8 +23,6 @@ LLAMA_SERVER = "/opt/homebrew/bin/llama-server"
 API_URL = "http://127.0.0.1:{port}/v1/chat/completions"
 HEALTH_URL = "http://127.0.0.1:{port}/health"
 RESULTS_DIR = Path(__file__).parent / "results"
-ASSETS_DIR = Path(__file__).parent / "assets"
-TEST_IMAGE = ASSETS_DIR / "test_chart.png"
 HF_HUB_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
 SERVER_STARTUP_TIMEOUT = 300  # seconds -- 27B models take longer to mmap
@@ -42,18 +39,14 @@ class ModelConfig:
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 64
-    supports_vision: bool = True
     server_args: tuple[str, ...] = ()
     # Qwen3 family ships thinking mode on by default; set False to disable via
     # chat_template_kwargs={"enable_thinking": False} on each request.
     thinking: bool = True
-    # Qwen3 mmproj responds well to a higher floor on visual tokens (better OCR);
-    # Gemma 4 mmproj caps image pixels lower and rejects this flag. Opt-in.
-    image_min_tokens: int = 0
 
 
 # MTP speculative-decoding flags (build 9380). The MTP head is embedded in the -MTP
-# GGUF; --mmproj is unsupported with MTP, so MTP runs are vision-off and single-stream.
+# GGUF; MTP runs single-stream (-np 1).
 _MTP_ARGS: tuple[str, ...] = ("-np", "1", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2")
 
 
@@ -67,8 +60,7 @@ def _qwen_matrix(
     """Full {think, nothink} x {non-MTP, MTP} matrix for one Qwen model.
 
     Sampling per Qwen team: thinking on -> temp=0.6/top_p=0.95; off -> 0.7/0.8 (top_k=20).
-    Non-MTP keeps vision on (image_min_tokens=1024); MTP is vision-off + draft-mtp flags.
-    `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
+    MTP adds the draft-mtp flags. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
     """
 
     def make(thinking: bool, mtp: bool) -> ModelConfig:
@@ -81,8 +73,6 @@ def _qwen_matrix(
             top_p=top_p,
             top_k=20,
             thinking=thinking,
-            supports_vision=not mtp,  # --mmproj is unsupported with MTP
-            image_min_tokens=0 if mtp else 1024,
             server_args=extra_args + _MTP_ARGS if mtp else extra_args,
         )
 
@@ -100,15 +90,21 @@ MODELS: list[ModelConfig] = [
         name="gemma-4-e4b-Q4_K_M",
         hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf",
     ),
-    # Gemma 4 26B-A4B MoE -- 26B total / 4B active. Q4_K_M ~16.8 GB + mmproj ~0.8 GB.
+    # Gemma 4 12B dense (Google, 2026) -- official QAT q4_0 (~6.5 GB). Fills the gap between
+    # e4b and 26b-a4b; fits default ctx.
+    ModelConfig(
+        name="gemma-4-12b-qat-q4_0",
+        hf="google/gemma-4-12B-it-qat-q4_0-gguf:gemma-4-12b-it-qat-q4_0.gguf",
+    ),
+    # Gemma 4 26B-A4B MoE -- 26B total / 4B active. Q4_K_M ~16.8 GB.
     # Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set at default ctx.
     ModelConfig(
         name="gemma-4-26b-a4b-Q4_K_M",
         hf="ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf",
     ),
-    # Gemma 4 31B dense (Google, 2026) -- official QAT q4_0 (~17.7 GB + mmproj 1.2 GB).
+    # Gemma 4 31B dense (Google, 2026) -- official QAT q4_0 (~17.7 GB).
     # QAT (quantization-aware training) is typically more accurate at 4-bit than a
-    # post-hoc Q4_K_M. Vision-capable. -c 8192 keeps f16 KV within the working set.
+    # post-hoc Q4_K_M. -c 8192 keeps f16 KV within the working set.
     ModelConfig(
         name="gemma-4-31b-qat-q4_0",
         hf="google/gemma-4-31B-it-qat-q4_0-gguf:gemma-4-31B_q4_0-it.gguf",
@@ -131,8 +127,8 @@ MODELS: list[ModelConfig] = [
     # Other families -- single instruct config each (no Qwen-style enable_thinking toggle,
     # no MTP head). Sampling from each model card where given, else neutral defaults
     # (temp>0 so the n=3 sampling actually varies).
-    # Mistral Ministral 3 (Apache-2.0) -- multimodal (Pixtral-style mmproj). Card: temp<0.1
-    # for production; top_p/top_k unspecified, left neutral. mmproj is auto-resolved.
+    # Mistral Ministral 3 (Apache-2.0). Card: temp<0.1 for production; top_p/top_k
+    # unspecified, left neutral.
     ModelConfig(
         name="ministral-3-8b-Q8_0",
         hf="mistralai/Ministral-3-8B-Instruct-2512-GGUF:Ministral-3-8B-Instruct-2512-Q8_0.gguf",
@@ -155,7 +151,6 @@ MODELS: list[ModelConfig] = [
         temperature=0.7,
         top_p=0.95,
         top_k=64,
-        supports_vision=False,
     ),
     # Zhipu GLM-4.7-Flash (MIT, text-only) -- 30B-A3B MoE (3B active, so fast despite size).
     # Q4_K_M ~18.3 GB; -c 8192 keeps f16 KV in the working set. Card: temp=1.0, top_p=0.95.
@@ -165,8 +160,28 @@ MODELS: list[ModelConfig] = [
         temperature=1.0,
         top_p=0.95,
         top_k=64,
-        supports_vision=False,
         server_args=("-c", "8192"),
+    ),
+    # Liquid AI LFM2.5-8B-A1B (lfm1.0 license, text-only) -- edge MoE, 8B total / 1.5B
+    # active, so decode is fast despite size. Q8_0 ~9.0 GB. Card: temp=0.2, top_k=80,
+    # repetition_penalty=1.05 (no per-config repetition_penalty field; top_p left neutral).
+    ModelConfig(
+        name="lfm2.5-8b-a1b-Q8_0",
+        hf="LiquidAI/LFM2.5-8B-A1B-GGUF:LFM2.5-8B-A1B-Q8_0.gguf",
+        temperature=0.2,
+        top_p=1.0,
+        top_k=80,
+    ),
+    # JetBrains Mellum2-12B-A2.5B-Thinking (Apache-2.0, text/coding) -- coding MoE, 12B
+    # total / 2.5B active, emits native <think> blocks (stripped before verify). Q4_K_M
+    # ~8.1 GB. Card: temp=0.6, top_p=0.95, top_k=20. enable_thinking kwarg is not sent
+    # (non-Qwen); thinking stays on by default so it gets the 16384-token budget.
+    ModelConfig(
+        name="mellum2-12b-a2.5b-think-Q4_K_M",
+        hf="JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M:Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
     ),
     # Qwen 3.6 35B-A3B MoE (UD-Q4_K_M ~22.1 GB) excluded: too marginal on the ~25 GB
     # working set (88% of it, even tighter with f16 KV). See README "Memory class reference".
@@ -188,7 +203,6 @@ class Prompt:
     category: str
     messages: list[dict[str, object]]
     verify: Verifier
-    vision: bool = False
 
 
 # ---- verifier helpers --------------------------------------------------------
@@ -320,38 +334,16 @@ def _user(text: str) -> list[dict[str, object]]:
     return [{"role": "user", "content": text}]
 
 
-def _vision_user(image_path: Path, text: str) -> list[dict[str, object]]:
-    b64 = base64.b64encode(image_path.read_bytes()).decode()
-    return [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                },
-                {"type": "text", "text": text},
-            ],
-        },
-    ]
-
-
 # Tighter answers + verifiable correctness. Each prompt is sampled DEFAULT_N_RUNS times
 # at temperature > 0; we report passes/N. A 'pass' must contain the right answer,
 # not just plausibly mention it.
 
-# Vision prompt placeholders (messages filled in _build_prompts).
-_VISION_MAX_PLACEHOLDER: list[dict[str, object]] = []
-_VISION_MIN_PLACEHOLDER: list[dict[str, object]] = []
-_VISION_DIFF_PLACEHOLDER: list[dict[str, object]] = []
-
-
-# Discriminating core only. Trivial prompts that every model passes (math_div,
+# Discriminating core only (text). Trivial prompts that every model passes (math_div,
 # math_percent, logic_syllogism_yes, code_total, translate_fr/es) and the brittle
 # substring-matched summarize were dropped -- they added no signal and inflated
 # scores toward the ceiling. What remains actually separates models: non-trivial
-# arithmetic, multi-step word problems, a real-world-override logic trap, executed
-# code, and chart OCR.
+# arithmetic, multi-step word problems, a real-world-override logic trap, and executed
+# code.
 PROMPTS: list[Prompt] = [
     # ---- arithmetic (non-trivial multiplication) ----
     Prompt(
@@ -422,28 +414,6 @@ PROMPTS: list[Prompt] = [
                 ("fizzbuzz(30)", "FizzBuzz"),
             ]
         ),
-    ),
-    # ---- vision (3 different questions on same chart) ----
-    Prompt(
-        name="vision_max",
-        category="vision",
-        messages=_VISION_MAX_PLACEHOLDER,
-        verify=v_number(71),
-        vision=True,
-    ),
-    Prompt(
-        name="vision_min",
-        category="vision",
-        messages=_VISION_MIN_PLACEHOLDER,
-        verify=v_number(35),
-        vision=True,
-    ),
-    Prompt(
-        name="vision_diff",
-        category="vision",
-        messages=_VISION_DIFF_PLACEHOLDER,
-        verify=v_number(36),
-        vision=True,
     ),
 ]
 
@@ -533,13 +503,12 @@ class ModelResult:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_local_paths(hf_spec: str) -> tuple[Path, Path | None] | None:
-    """Resolve cached local paths for an HF model spec 'repo:filename'.
+def _resolve_local_path(hf_spec: str) -> Path | None:
+    """Resolve the cached local model file for an HF spec 'repo:filename'.
 
-    Returns (model_path, mmproj_path or None) or None if not cached.
-    The llama-server '-hf' resolver hangs on some Qwen repos even when files are
-    cached, so we always start with '-m' pointing at the local file. Prefers
-    mmproj-BF16 (Qwen models train in bf16; better dynamic range than F16).
+    Returns the model path, or None if not cached. The llama-server '-hf' resolver
+    hangs on some Qwen repos even when files are cached, so we always start with '-m'
+    pointing at the local file.
     """
     hf_repo, _, filename = hf_spec.partition(":")
     if not filename:
@@ -548,33 +517,18 @@ def _resolve_local_paths(hf_spec: str) -> tuple[Path, Path | None] | None:
     snapshots = HF_HUB_DIR / cache_name / "snapshots"
     if not snapshots.exists():
         return None
-    # Prefer snapshots that include an mmproj projector (multiple snapshot dirs may
-    # exist from interrupted downloads; the first one iterdir() returns may be partial).
-    best: tuple[Path, Path | None] | None = None
+    # Multiple snapshot dirs may exist from interrupted downloads; return the first
+    # that actually contains the requested file.
     for snap in snapshots.iterdir():
         model_path = snap / filename
-        if not model_path.exists():
-            continue
-        mmproj: Path | None = None
-        for preferred in ("mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf"):
-            cand = snap / preferred
-            if cand.exists():
-                mmproj = cand
-                break
-        if mmproj is None:
-            # Match both leading (mmproj-F16.gguf, Qwen/Gemma) and trailing
-            # (Ministral-...-BF16-mmproj.gguf, Mistral) projector names.
-            mmproj = next(iter(snap.glob("*mmproj*.gguf")), None)
-        if mmproj is not None:
-            return model_path, mmproj
-        if best is None:
-            best = (model_path, None)
-    return best
+        if model_path.exists():
+            return model_path
+    return None
 
 
 def _is_model_downloaded(model: ModelConfig) -> bool:
     """Check if the model is already cached locally."""
-    return _resolve_local_paths(model.hf) is not None
+    return _resolve_local_path(model.hf) is not None
 
 
 def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
@@ -597,7 +551,7 @@ def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
 
 # Best-practice defaults for Apple Silicon Metal + Qwen3 family.
 # -ngl 99: full GPU offload (no-op safety on Apple). -fa on: flash attention (Metal-supported).
-# -ub 1024: larger ubatch speeds up prompt processing for vision/long prompts.
+# -ub 1024: larger ubatch speeds up prompt processing for long prompts.
 # KV cache is left at the f16 default. On the 32 GB machine all models (incl. 27B at
 # -c 8192 and gemma-26b at -c 16384) fit with f16 KV, and f16 is measurably faster than
 # the old q8_0 KV: llama-bench on Qwen3.6-27B Q4_K_M (M5, build 9380) gave tg128 6.32 t/s
@@ -618,11 +572,10 @@ DEFAULT_SERVER_ARGS: tuple[str, ...] = (
 
 def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
     """Start llama-server with the given model config (uses local cached file via -m)."""
-    paths = _resolve_local_paths(model.hf)
-    if paths is None:
+    model_path = _resolve_local_path(model.hf)
+    if model_path is None:
         msg = f"Model file not cached: {model.hf}"
         raise FileNotFoundError(msg)
-    model_path, mmproj_path = paths
     # Per-model server_args override defaults for the same flag (last value wins in llama-server).
     cmd = [
         LLAMA_SERVER,
@@ -633,12 +586,6 @@ def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
         *DEFAULT_SERVER_ARGS,
         *model.server_args,
     ]
-    if mmproj_path is not None and model.supports_vision:
-        cmd.extend(["--mmproj", str(mmproj_path)])
-        if model.image_min_tokens > 0:
-            # Forces enough visual tokens for OCR / chart reading. Qwen3 mmproj
-            # supports up to ~2048; Gemma 4 mmproj rejects this flag.
-            cmd.extend(["--image-min-tokens", str(model.image_min_tokens)])
     log.info("Starting server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _wait_for_server(port)
@@ -706,9 +653,10 @@ def _chat(
 # ---------------------------------------------------------------------------
 
 
-# Thinking only helps on multi-step work; on short-answer categories (vision chart
-# reads) it loops and burns the request timeout for no accuracy gain. So even a -think
-# config thinks ONLY on these categories; everything else runs direct.
+# Thinking only helps on multi-step work; on short-answer categories it loops and burns
+# the request timeout for no accuracy gain. A -think config thinks ONLY on these
+# categories; everything else runs direct. (The current core is entirely these three,
+# but the gate stays so short-answer prompts can be re-added without a regression.)
 THINKING_CATEGORIES: frozenset[str] = frozenset({"math", "reasoning", "coding"})
 
 
@@ -740,44 +688,6 @@ def _run_prompt(prompt: Prompt, model_cfg: ModelConfig, port: int, n: int) -> Pr
     return result
 
 
-# Per-name vision question text. Test chart shows Q1=$42M, Q2=$58M, Q3=$35M, Q4=$71M.
-_VISION_QUESTIONS: dict[str, str] = {
-    "vision_max": (
-        "Look at this bar chart. What is the value of the tallest bar? Reply with just the number (no units, no $)."
-    ),
-    "vision_min": (
-        "Look at this bar chart. What is the value of the shortest bar? Reply with just the number (no units, no $)."
-    ),
-    "vision_diff": (
-        "Look at this bar chart. Subtract the shortest bar's value from the tallest bar's value. "
-        "Reply with just the resulting number (no units, no $)."
-    ),
-}
-
-
-def _build_prompts() -> list[Prompt]:
-    """Build prompt list. Vision prompts get their messages filled in if the image exists."""
-    prompts: list[Prompt] = []
-    for p in PROMPTS:
-        if p.vision:
-            if not TEST_IMAGE.exists():
-                log.warning("Skipping vision prompt %s -- test image missing at %s", p.name, TEST_IMAGE)
-                continue
-            question = _VISION_QUESTIONS.get(p.name)
-            if question is None:
-                log.warning("No vision question registered for %s -- skipping", p.name)
-                continue
-            p = Prompt(
-                name=p.name,
-                category=p.category,
-                messages=_vision_user(TEST_IMAGE, question),
-                verify=p.verify,
-                vision=True,
-            )
-        prompts.append(p)
-    return prompts
-
-
 def run_benchmark(
     models: list[ModelConfig] | None = None,
     port: int = DEFAULT_PORT,
@@ -786,7 +696,6 @@ def run_benchmark(
     """Run all prompts against all models. Each prompt is sampled `n` times."""
     if models is None:
         models = MODELS
-    prompts = _build_prompts()
     results: list[ModelResult] = []
 
     for model in models:
@@ -797,10 +706,7 @@ def run_benchmark(
         proc = _start_server(model, port)
         try:
             mr = ModelResult(model_name=model.name, hf_id=model.hf)
-            for prompt in prompts:
-                if prompt.vision and not model.supports_vision:
-                    log.info("  Skipping vision prompt for %s", model.name)
-                    continue
+            for prompt in PROMPTS:
                 pr = _run_prompt(prompt, model, port, n)
                 mr.prompts.append(pr)
             results.append(mr)
