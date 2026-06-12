@@ -144,30 +144,35 @@ disown
 After each model the bench writes `results/benchmark.<model>.json` so a crash
 mid-run does not lose prior results.
 
-## Test set (6 text prompts, discriminating core)
+## Test set (12 text prompts, discriminating core)
 
-Each prompt is sampled `n=3` times at temperature > 0; we report passes/n.
-Trimmed from the original 16 to a **discriminating core**: prompts that every model
-passed (simple division/percent, the easy syllogism, `total()` sum, the two
-translations) and the brittle substring-matched `summarize` were dropped -- they
-sat at the ceiling and added no signal. What remains actually separates models:
+Each prompt is sampled `n=3` times at temperature > 0; we report passes/n. Every config
+is scored on the same prompts (`/36` at n=3). Trimmed from the original 16 to a
+**discriminating core**: prompts that every model passed (simple division/percent, the
+easy syllogism, `total()` sum, the two translations) and the brittle substring-matched
+`summarize` were dropped. What remains actually separates models:
 
 | Category | Prompts | Verifier type |
 |----------|---------|---------------|
-| math | math_mul (23x17) | numeric with tolerance |
+| math | math_mul (23x17), math_multistep ((45+17)*3-28), math_modular (2^10 mod 1000) | numeric with tolerance |
 | reasoning | word_speed (multi-step), word_age (algebra), logic_syllogism_no (real-world override trap), logic_negation | numeric / yes-no first-token |
-| coding | code_fizzbuzz | **executes the code** against test cases via subprocess |
+| coding | code_fizzbuzz, is_palindrome, reverse_words | **executes the code** against test cases via subprocess |
+| structured | json_person (extract name+age to JSON), format_primes (strict comma-list) | parsed JSON (`v_json`) / strict regex |
 
-The 3 chart-OCR **vision** prompts were removed: vision was supported unevenly across
-the set (text-only for Qwen-MTP / Phi / GLM / LFM / Mellum, and the Gemma 4 12B QAT
+The `structured` category probes **instruction-following / function-calling** -- the
+strength of agentic models (Ministral / GLM / Qwen3.6) that a pure reasoning core misses.
+All verification is mechanical (no LLM judge): numbers, yes/no, regex, executed code, and
+parsed JSON.
+
+The 3 chart-OCR **vision** prompts were removed earlier: vision was supported unevenly
+across the set (text-only for Qwen-MTP / Phi / GLM / LFM / Mellum, and the Gemma 4 12B QAT
 mmproj fails to load on this llama.cpp build), and the `--mmproj` path was a recurring
-source of server-start failures. The suite is now uniformly text, so every config is
-scored on the same 6 prompts (`/18` at n=3).
+source of server-start failures. The suite is uniformly text.
 
 **Per-category thinking.** A `-think` config enables thinking only for
-`math`/`reasoning`/`coding` (`THINKING_CATEGORIES` in `benchmark.py`). The current core
-is entirely these three, so the gate is a no-op today; it stays so short-answer prompts
-can be re-added later without a thinking-loop / request-timeout regression.
+`math`/`reasoning`/`coding` (`THINKING_CATEGORIES` in `benchmark.py`). `structured` is
+deliberately excluded -- thinking on JSON/strict-format tasks wastes tokens and can break
+the format -- so `-think` configs run those prompts direct.
 
 ## Sampling parameters
 
@@ -226,7 +231,7 @@ each run -- not duplicated here):
   finish within the 120s cap at a few tok/s. That's a speed limit, not a reasoning failure.
 - **MTP pays off most on 4B-9B.** Multi-token-prediction speculative decoding gives the
   largest tok/s gains in the mid range; it's marginal on 2B and on the 27B. Accuracy is
-  unchanged (MTP and non-MTP run the same 6 prompts).
+  unchanged (MTP and non-MTP run the same 12 prompts).
 - **f16 KV cache, not q8_0.** On 32 GB the f16 default fits every model and decodes
   ~1.7x faster than the old q8_0 KV hack (llama-bench, 27B). Quantized K on Metal is costly.
 - **Speed numbers are throttling-sensitive.** Long suite runs throttle thermally; treat
@@ -247,8 +252,8 @@ See `results/COMPARISON.md` for the full table and per-model breakdown.
   cooler/faster than late ones). For true peak decode speed, measure one model on a cool
   machine with `llama-bench`, not the tail of a multi-hour suite. The suite's tok/s is
   fine for *relative* comparisons measured back-to-back (MTP on/off, think/no-think).
-- **MTP vs non-MTP accuracy** is directly comparable: both run the same 6-prompt text
-  core (`/18` attempts at n=3), so any pass-total difference is real, not an artifact of
+- **MTP vs non-MTP accuracy** is directly comparable: both run the same 12-prompt text
+  core (`/36` attempts at n=3), so any pass-total difference is real, not an artifact of
   a differing prompt set.
 
 ### Summary on M4 16GB, n=3 (April 2026 baseline -- prior 16 GB machine)

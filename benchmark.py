@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -299,7 +300,9 @@ def v_python_exec(test_cases: list[tuple[str, object]]) -> Verifier:
             runner += (
                 f"try:\n"
                 f"    got = eval({json.dumps(call)}, ns)\n"
-                f"    results.append((got == {json.dumps(want)}, repr(got)))\n"
+                # repr() emits a valid Python literal for the expected value; json.dumps
+                # would turn True/False/None into true/false/null (a NameError at exec).
+                f"    results.append((got == {want!r}, repr(got)))\n"
                 f"except Exception as e:\n"
                 f"    results.append((False, f'EXC {{type(e).__name__}}: {{e}}'))\n"
             )
@@ -330,6 +333,52 @@ def v_python_exec(test_cases: list[tuple[str, object]]) -> Verifier:
     return check
 
 
+def v_json(expected: dict[str, object]) -> Verifier:
+    """Answer must contain a JSON object whose keys match `expected`.
+
+    Tolerates a ```json``` fence or surrounding prose: the span from the first '{'
+    to the last '}' is parsed. Numbers compare by value (34 == "34" == 34.0);
+    strings compare case-insensitively after stripping. Tests structured-output /
+    instruction-following, the strength of agentic / function-calling models.
+    """
+
+    def check(text: str) -> tuple[bool, str]:
+        ans = _strip_think(text)
+        start, end = ans.find("{"), ans.rfind("}")
+        if start == -1 or end <= start:
+            return False, "no JSON object"
+        try:
+            parsed: object = json.loads(ans[start : end + 1])
+        except json.JSONDecodeError:
+            return False, "invalid JSON"
+        if not isinstance(parsed, dict):
+            return False, "JSON is not an object"
+        obj = cast("dict[str, object]", parsed)
+        for key, want in expected.items():
+            if key not in obj:
+                return False, f"missing key '{key}'"
+            got: object = obj[key]
+            if isinstance(want, bool):
+                if got != want:
+                    return False, f"{key}={got!r}, want {want!r}"
+            elif isinstance(want, (int, float)):
+                if isinstance(got, bool) or not isinstance(got, (int, float, str)):
+                    return False, f"{key}={got!r} not numeric"
+                try:
+                    if abs(float(got) - float(want)) > 1e-6:
+                        return False, f"{key}={got!r}, want {want!r}"
+                except ValueError:
+                    return False, f"{key}={got!r} not numeric"
+            elif isinstance(want, str):
+                if str(got).strip().lower() != want.strip().lower():
+                    return False, f"{key}={got!r}, want {want!r}"
+            elif got != want:
+                return False, f"{key}={got!r}, want {want!r}"
+        return True, ""
+
+    return check
+
+
 def _user(text: str) -> list[dict[str, object]]:
     return [{"role": "user", "content": text}]
 
@@ -338,19 +387,34 @@ def _user(text: str) -> list[dict[str, object]]:
 # at temperature > 0; we report passes/N. A 'pass' must contain the right answer,
 # not just plausibly mention it.
 
-# Discriminating core only (text). Trivial prompts that every model passes (math_div,
-# math_percent, logic_syllogism_yes, code_total, translate_fr/es) and the brittle
-# substring-matched summarize were dropped -- they added no signal and inflated
-# scores toward the ceiling. What remains actually separates models: non-trivial
-# arithmetic, multi-step word problems, a real-world-override logic trap, and executed
-# code.
+# Discriminating, mechanically-verifiable text core across four dimensions: math (3),
+# reasoning (4), coding (3, executed), structured output (2, JSON / strict format).
+# Trivial prompts that every model passed (math_div, math_percent, logic_syllogism_yes,
+# code_total, translate_fr/es) and the brittle substring-matched summarize were dropped.
+# The structured dimension probes instruction-following / function-calling, the strength
+# of agentic models (Ministral / GLM / Qwen3.6) that the reasoning core alone misses.
+# No LLM judge: every prompt verifies by number / yes-no / regex / executed code / parsed JSON.
 PROMPTS: list[Prompt] = [
-    # ---- arithmetic (non-trivial multiplication) ----
+    # ---- arithmetic (non-trivial, multi-step) ----
     Prompt(
         name="math_mul",
         category="math",
         messages=_user("What is 23 multiplied by 17? Reply with only the number."),
         verify=v_number(391),
+    ),
+    Prompt(
+        name="math_multistep",
+        category="math",
+        messages=_user("Compute (45 + 17) * 3 - 28. Reply with only the number."),
+        # 62 * 3 = 186; 186 - 28 = 158
+        verify=v_number(158),
+    ),
+    Prompt(
+        name="math_modular",
+        category="math",
+        messages=_user("What is 2 raised to the power of 10, modulo 1000? Reply with only the number."),
+        # 1024 mod 1000 = 24 (catches models that drop the mod step and answer 1024)
+        verify=v_number(24),
     ),
     # ---- word problems (multi-step reasoning) ----
     Prompt(
@@ -414,6 +478,63 @@ PROMPTS: list[Prompt] = [
                 ("fizzbuzz(30)", "FizzBuzz"),
             ]
         ),
+    ),
+    Prompt(
+        name="code_palindrome",
+        category="coding",
+        messages=_user(
+            "Write a Python function `is_palindrome(s: str) -> bool` that returns True if `s` "
+            "reads the same forwards and backwards, ignoring case and any non-alphanumeric "
+            "characters. Reply with code only, in a single ```python``` block."
+        ),
+        verify=v_python_exec(
+            [
+                ("is_palindrome('A man, a plan, a canal: Panama')", True),
+                ("is_palindrome('hello')", False),
+                ("is_palindrome('Was it a car or a cat I saw?')", True),
+                ("is_palindrome('')", True),
+                ("is_palindrome('No lemon, no melon')", True),
+            ]
+        ),
+    ),
+    Prompt(
+        name="code_reverse_words",
+        category="coding",
+        messages=_user(
+            "Write a Python function `reverse_words(s: str) -> str` that returns the words of `s` "
+            "in reverse order, separated by single spaces, with leading and trailing whitespace "
+            "removed. Reply with code only, in a single ```python``` block."
+        ),
+        verify=v_python_exec(
+            [
+                ("reverse_words('the sky is blue')", "blue is sky the"),
+                ("reverse_words('  hello   world  ')", "world hello"),
+                ("reverse_words('a')", "a"),
+                ("reverse_words('one two')", "two one"),
+            ]
+        ),
+    ),
+    # ---- structured output / instruction-following (JSON, strict format) ----
+    Prompt(
+        name="json_person",
+        category="structured",
+        messages=_user(
+            "Extract the person's name and age from this sentence into a JSON object with "
+            'exactly the keys "name" (string) and "age" (integer): '
+            "'Maria is 34 years old and lives in Berlin.' Reply with only the JSON object."
+        ),
+        verify=v_json({"name": "Maria", "age": 34}),
+    ),
+    Prompt(
+        name="format_primes",
+        category="structured",
+        messages=_user(
+            "List the first five prime numbers in ascending order as a comma-separated list. "
+            "Reply with only the list and nothing else."
+        ),
+        # Strict format: the stripped answer must be exactly "2, 3, 5, 7, 11" (spacing flexible,
+        # optional trailing period). Leading prose fails -- that is the instruction-following test.
+        verify=v_regex(r"^\s*2\s*,\s*3\s*,\s*5\s*,\s*7\s*,\s*11\s*\.?\s*$"),
     ),
 ]
 
@@ -655,8 +776,8 @@ def _chat(
 
 # Thinking only helps on multi-step work; on short-answer categories it loops and burns
 # the request timeout for no accuracy gain. A -think config thinks ONLY on these
-# categories; everything else runs direct. (The current core is entirely these three,
-# but the gate stays so short-answer prompts can be re-added without a regression.)
+# categories; everything else runs direct. The `structured` category is deliberately
+# excluded -- thinking on JSON/strict-format tasks wastes tokens and can break the format.
 THINKING_CATEGORIES: frozenset[str] = frozenset({"math", "reasoning", "coding"})
 
 

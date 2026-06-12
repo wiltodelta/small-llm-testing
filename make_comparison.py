@@ -48,7 +48,7 @@ def main() -> None:
         "# Benchmark comparison",
         "",
         f"Generated from `benchmark.json` ({data['timestamp']}). Apple M5, 32 GB, f16 KV.",
-        "Test set: 6-prompt text discriminating core, n=3. Every config scores out of `/18`.",
+        "Test set: 12-prompt text discriminating core, n=3. Every config scores out of `/36`.",
         "",
         "Caveats: (1) fails split `wrong/timeout/empty` -- a timeout is too-slow-to-finish,",
         "not a wrong answer. (2) `tok/s` from this long suite is thermally throttled toward",
