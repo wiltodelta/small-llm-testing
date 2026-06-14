@@ -26,17 +26,21 @@ Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so 
 two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
 productively (it loops on trivial prompts and times out, a net loss vs no-think).
 
-Each Qwen model runs the full matrix: **{think, no-think} x {non-MTP, MTP}** = 4 configs.
+Each Qwen model runs **2 configs: `-mtp-think` and `-mtp-nothink`** -- thinking mode on
+(better reasoning, much slower) vs off (fast direct), both loaded from the
+[MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) with multi-token prediction
+(`--spec-type draft-mtp`). An earlier A/B kept a non-MTP variant of each; it was dropped
+because MTP strictly dominated -- 1.2-1.65x faster decode at the same accuracy, and the
+extra speed pulls think-mode coding back under the 120s request timeout. MTP heads ship for
+the whole Qwen 3.5 / 3.6 line.
 
-- `-think` / `-nothink`: thinking mode on (better reasoning, much slower) vs off (fast direct).
-- `-mtp-*`: same model from the [MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF)
-  with multi-token prediction (`--spec-type draft-mtp`) for a tok/s A/B. MTP heads ship for
-  the whole Qwen 3.5 / 3.6 line.
-
-Gemma has no thinking mode and no MTP head: one config each. The other families
-(Ministral 3, Phi-4-mini, GLM-4.7-Flash, LFM2.5, Mellum2) likewise run one instruct
-config each -- no Qwen-style `enable_thinking` toggle and no MTP head. The suite is
-text-only (see Test set below).
+Gemma 4 (unlike Gemma 3) has an `enable_thinking` toggle, so each Gemma runs a
+**think + nothink pair** (no MTP head) -- the same think/nothink A/B as Qwen. Measured,
+thinking is worth +3..+9 for Gemma (math_modular/multistep, reasoning) on every size
+except 26b-a4b (ceiling either way), at 10-25x wall time but no timeouts. The other
+families (Ministral 3, Phi-4-mini, GLM-4.7-Flash, LFM2.5, Mellum2) run one config each
+with no MTP head; GLM and LFM2.5/Mellum reason by default, Ministral/Phi are plain
+instruct. The suite is text-only (see Test set below).
 
 ### Memory class reference
 
@@ -83,14 +87,10 @@ from huggingface_hub import hf_hub_download
 for repo, files in [
     ('ggml-org/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf']),
     ('ggml-org/gemma-4-E4B-it-GGUF', ['gemma-4-E4B-it-Q4_K_M.gguf']),
-    ('unsloth/Qwen3.5-2B-GGUF',   ['Qwen3.5-2B-Q8_0.gguf']),
-    ('unsloth/Qwen3.5-4B-GGUF',   ['Qwen3.5-4B-Q8_0.gguf']),
-    ('unsloth/Qwen3.5-9B-GGUF',   ['Qwen3.5-9B-Q8_0.gguf']),
     ('google/gemma-4-12B-it-qat-q4_0-gguf', ['gemma-4-12b-it-qat-q4_0.gguf']),
     ('ggml-org/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-Q4_K_M.gguf']),
     ('google/gemma-4-31B-it-qat-q4_0-gguf', ['gemma-4-31B_q4_0-it.gguf']),
-    ('unsloth/Qwen3.6-27B-GGUF',  ['Qwen3.6-27B-Q4_K_M.gguf']),
-    # MTP repos (tok/s A/B runs).
+    # Qwen runs from the MTP GGUFs (multi-token prediction; non-MTP variants dropped).
     ('unsloth/Qwen3.5-2B-MTP-GGUF',  ['Qwen3.5-2B-Q8_0.gguf']),
     ('unsloth/Qwen3.5-4B-MTP-GGUF',  ['Qwen3.5-4B-Q8_0.gguf']),
     ('unsloth/Qwen3.5-9B-MTP-GGUF',  ['Qwen3.5-9B-Q8_0.gguf']),
@@ -176,15 +176,34 @@ the format -- so `-think` configs run those prompts direct.
 
 ## Sampling parameters
 
-Each model uses vendor-recommended parameters; see `MODELS` in `benchmark.py`:
+Each model uses parameters verified against its official model card; see `MODELS` in
+`benchmark.py`. `min_p=0` is pinned on every request (server default may clip the tail).
 
-| Model family | Temperature | top_p | top_k | Source |
-|--------------|-------------|-------|-------|--------|
-| Gemma 4 | 1.0 | 0.95 | 64 | [Google AI docs](https://ai.google.dev/gemma/docs/core) |
-| Qwen3.5 thinking on | 0.6 | 0.95 | 20 | [Qwen3 blog](https://qwenlm.github.io/blog/qwen3/) |
-| Qwen3.5 thinking off | 0.7 | 0.8 | 20 | same |
+| Model | Temperature | top_p | top_k | presence / repetition penalty | Source |
+|---|---|---|---|---|---|
+| Gemma 4 (all) | 1.0 | 0.95 | 64 | - | [Gemma cards](https://ai.google.dev/gemma/docs/core) ("all use cases") |
+| Qwen thinking | 0.6 | 0.95 | 20 | presence 1.5 (0.0 on 27B) | [Qwen cards](https://qwenlm.github.io/blog/qwen3/) |
+| Qwen no-think | 0.7 | 0.8 | 20 | presence 1.5 | same |
+| Ministral 3 8B/14B | 0.07 | 1.0 | off | - | card: "temperature below 0.1" |
+| Phi-4-mini | 0.0 (greedy) | - | off | - | card shows only `temperature=0.0, do_sample=False` |
+| GLM-4.7-Flash | 1.0 | 0.95 | off | - | z.ai card (no top_k published) |
+| LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | card: temp 0.2, top_k 80, rep 1.05 |
+| Mellum2-12B | 0.6 | 0.95 | 20 | - | card quickstart |
 
-`min_p=0` is pinned explicitly on every Qwen request (server default may clip the tail).
+Notes:
+- **presence_penalty / repetition_penalty** are Qwen's and LFM2.5's documented anti-loop
+  knobs (Qwen up to 2.0; LFM2.5 1.05; `repetition_penalty` is sent as llama.cpp
+  `repeat_penalty`). They were hypothesized to cut the think-mode timeouts, but a controlled
+  re-run showed almost no effect (27B-think 12 -> 11 timeouts, small Qwen unchanged): the
+  timeouts are bound by decode speed, not looping. The knobs stay because they are
+  vendor-recommended, not because they fixed the artifact -- raise `REQUEST_TIMEOUT` for that.
+- **Gemma 4 has a thinking toggle** (`enable_thinking`, unlike Gemma 3), so it runs a
+  think/nothink pair like Qwen; thinking is worth +3..+9 for it (at 10-25x time, no timeouts).
+  `enable_thinking` is sent on every request; toggle-less models ignore it. GLM's hybrid
+  thinking uses a different
+  switch (`thinking:{type}`) and defaults to enabled, so GLM runs thinking-on throughout.
+- **Phi-4-mini** publishes no sampling preset beyond greedy; at temperature 0 the `n=3`
+  samples are identical (deterministic pass/fail), which is fine for this suite.
 
 ## Server flags applied to all models
 
@@ -225,13 +244,20 @@ each run -- not duplicated here):
 
 - **Best small-footprint model: Gemma 4 26B-A4B.** Top accuracy on the core set at a
   fraction of dense-27B cost (MoE, ~4B active) and fits the 32 GB working set.
-- **Thinking helps small/mid Qwen (2B-9B), not the slow 27B.** With per-category gating
-  (thinking only on math/reasoning/coding), `-think` beats `-nothink` on 2B/4B/9B. On
-  27B, `-think` loses -- but almost entirely on *timeouts*: long reasoning traces don't
-  finish within the 120s cap at a few tok/s. That's a speed limit, not a reasoning failure.
-- **MTP pays off most on 4B-9B.** Multi-token-prediction speculative decoding gives the
-  largest tok/s gains in the mid range; it's marginal on 2B and on the 27B. Accuracy is
-  unchanged (MTP and non-MTP run the same 12 prompts).
+- **Thinking helps math/reasoning but collapses on coding -- via timeouts, not bad code.**
+  `-think` beats `-nothink` on math and reasoning. On coding it craters (27B-think 0/9,
+  9B-think 1/9) but *every* failure is a timeout, never a wrong answer: the model thinks
+  too long and never emits the function within the 120s cap. Proof it is speed, not
+  thinking: Mellum2 (a native thinking model at ~40 tok/s) scores 9/9 on coding, and MTP
+  rescues every slow Qwen think-config (4B 9/9 with MTP vs 4/9 without). Raising
+  `REQUEST_TIMEOUT` would recover most of it; the 27B stays starved at ~4-5 tok/s.
+- **MTP is the only Qwen decode mode now.** An earlier A/B kept a non-MTP variant; MTP
+  strictly dominated (1.2-1.65x faster, same accuracy, and the speed pulls think-coding
+  back under the timeout), so the non-MTP variants were dropped.
+- **The `structured` dimension is at ceiling -- every config scores 6/6.** JSON extraction
+  and strict comma-list output are trivial for all 19 models, so the category adds a flat
+  +6 to everyone without separating anyone. To make it discriminating it needs harder
+  tasks (nested objects, conditional extraction, format traps).
 - **f16 KV cache, not q8_0.** On 32 GB the f16 default fits every model and decodes
   ~1.7x faster than the old q8_0 KV hack (llama-bench, 27B). Quantized K on Metal is costly.
 - **Speed numbers are throttling-sensitive.** Long suite runs throttle thermally; treat
@@ -251,10 +277,10 @@ See `results/COMPARISON.md` for the full table and per-model breakdown.
   run is depressed by thermal throttling that accumulates over hours (early configs run
   cooler/faster than late ones). For true peak decode speed, measure one model on a cool
   machine with `llama-bench`, not the tail of a multi-hour suite. The suite's tok/s is
-  fine for *relative* comparisons measured back-to-back (MTP on/off, think/no-think).
-- **MTP vs non-MTP accuracy** is directly comparable: both run the same 12-prompt text
-  core (`/36` attempts at n=3), so any pass-total difference is real, not an artifact of
-  a differing prompt set.
+  fine for *relative* comparisons measured back-to-back (think/no-think).
+- **think vs no-think is compared on the same MTP model.** Both modes run the same
+  12-prompt core (`/36` at n=3) from the same MTP GGUF, so any pass-total difference is a
+  real mode effect, not a prompt-set or build artifact.
 
 ### Summary on M4 16GB, n=3 (April 2026 baseline -- prior 16 GB machine)
 

@@ -1,7 +1,7 @@
 """Regenerate results/COMPARISON.md from results/benchmark.json.
 
-COMPARISON.md is the analytical view (think vs no-think, MTP speedup by size, fail
-breakdown) on top of the raw RESULTS.md. Run after a benchmark to refresh it:
+COMPARISON.md is the analytical view (think vs no-think, fail breakdown) on top of the
+raw RESULTS.md. Run after a benchmark to refresh it:
 
     uv run python make_comparison.py
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +19,6 @@ from benchmark import fail_kind
 
 log = logging.getLogger(__name__)
 RESULTS_DIR = Path(__file__).parent / "results"
-# A Qwen config name: <size-label>[-mtp]-<think|nothink>. Gemma names don't match.
-_NAME_RE = re.compile(r"(?P<size>qwen[\d.]+-[\dab]+-\w+?)(?P<mtp>-mtp)?-(?P<mode>think|nothink)$")
 
 
 def _fail_counts(model: Any) -> tuple[int, int, int]:
@@ -29,14 +26,19 @@ def _fail_counts(model: Any) -> tuple[int, int, int]:
     return kinds.count("wrong"), kinds.count("timeout"), kinds.count("empty")
 
 
-def _qwen_sizes(models: dict[str, Any]) -> list[str]:
-    """Distinct Qwen size-labels (non-MTP names), sorted."""
-    sizes: set[str] = set()
+def _think_pairs(models: dict[str, Any]) -> list[str]:
+    """Base labels that have BOTH a `-think` and a `-nothink` config (Gemma and Qwen).
+
+    The base is the name minus the trailing `-think` (e.g. `gemma-4-e2b-Q8_0` or
+    `qwen3.5-2b-Q8_0-mtp`).
+    """
+    bases: list[str] = []
     for name in models:
-        m = _NAME_RE.match(name)
-        if m and not m.group("mtp"):
-            sizes.add(m.group("size"))
-    return sorted(sizes)
+        if name.endswith("-think"):
+            base = name[: -len("-think")]
+            if f"{base}-nothink" in models:
+                bases.append(base)
+    return sorted(bases)
 
 
 def main() -> None:
@@ -66,40 +68,19 @@ def main() -> None:
             f"{m['total_time_s']:.0f}s | {m['gen_tok_per_s']:.1f} |"
         )
 
-    sizes = _qwen_sizes(models)
-
     lines += [
         "",
-        "## Thinking vs no-thinking (non-MTP)",
+        "## Thinking vs no-thinking (Gemma 4 and Qwen; Qwen are MTP)",
         "",
-        "| Size | think | nothink | think fails w/t/e |",
+        "| Config | think | nothink | think fails w/t/e |",
         "|---|---|---|---|",
     ]
-    for size in sizes:
-        th, no = models.get(f"{size}-think"), models.get(f"{size}-nothink")
-        if not (th and no):
-            continue
+    for base in _think_pairs(models):
+        th, no = models[f"{base}-think"], models[f"{base}-nothink"]
         w, t, e = _fail_counts(th)
         lines.append(
-            f"| {size} | {th['passes']}/{th['attempts_total']} | {no['passes']}/{no['attempts_total']} | {w}/{t}/{e} |"
+            f"| {base} | {th['passes']}/{th['attempts_total']} | {no['passes']}/{no['attempts_total']} | {w}/{t}/{e} |"
         )
-
-    lines += [
-        "",
-        "## MTP tok/s speedup (mtp / non-mtp, same mode)",
-        "",
-        "| Size | think | nothink |",
-        "|---|---|---|",
-    ]
-    for size in sizes:
-        cells: list[str] = [f"| {size} "]
-        for mode in ("think", "nothink"):
-            base, mtp = models.get(f"{size}-{mode}"), models.get(f"{size}-mtp-{mode}")
-            if base and mtp and base["gen_tok_per_s"] > 0:
-                cells.append(f"| {mtp['gen_tok_per_s'] / base['gen_tok_per_s']:.2f}x ")
-            else:
-                cells.append("| - ")
-        lines.append("".join(cells) + "|")
 
     out = RESULTS_DIR / "COMPARISON.md"
     out.write_text("\n".join(lines) + "\n")

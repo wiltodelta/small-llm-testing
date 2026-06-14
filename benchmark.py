@@ -40,9 +40,14 @@ class ModelConfig:
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 64
+    # Vendor anti-repetition knobs (defaults are no-ops). presence_penalty: OpenAI-style,
+    # Qwen recommends up to 2.0 to stop endless thinking-mode generation. repetition_penalty
+    # maps to llama.cpp `repeat_penalty` (1.0 = off); LFM2.5 recommends 1.05.
+    presence_penalty: float = 0.0
+    repetition_penalty: float = 1.0
     server_args: tuple[str, ...] = ()
-    # Qwen3 family ships thinking mode on by default; set False to disable via
-    # chat_template_kwargs={"enable_thinking": False} on each request.
+    # Qwen3 / Gemma 4 / GLM ship thinking mode; `thinking` gates whether this config thinks
+    # on the THINKING_CATEGORIES. Enforced per request via chat_template_kwargs.
     thinking: bool = True
 
 
@@ -53,130 +58,138 @@ _MTP_ARGS: tuple[str, ...] = ("-np", "1", "--spec-type", "draft-mtp", "--spec-dr
 
 def _qwen_matrix(
     label: str,
-    base_repo: str,
     mtp_repo: str,
     gguf: str,
     extra_args: tuple[str, ...] = (),
+    think_presence_penalty: float = 1.5,
 ) -> list[ModelConfig]:
-    """Full {think, nothink} x {non-MTP, MTP} matrix for one Qwen model.
+    """think + nothink configs for one Qwen, both with MTP speculative decoding.
 
     Sampling per Qwen team: thinking on -> temp=0.6/top_p=0.95; off -> 0.7/0.8 (top_k=20).
-    MTP adds the draft-mtp flags. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
+    presence_penalty per the Qwen cards: 1.5 for non-thinking, and for thinking 1.5 on the
+    small models (3.5 2B/4B/9B) but 0.0 on the 27B (pass `think_presence_penalty=0.0`).
+    It is the vendor's documented fix for endless thinking-mode generation -- exactly the
+    looping that drives our think-mode timeouts.
+    All Qwen runs use the -MTP GGUF: in the A/B, MTP strictly dominated plain decode --
+    1.2-1.65x faster with the same accuracy, and the extra speed rescues think-mode coding
+    from the 120s timeout. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
     """
 
-    def make(thinking: bool, mtp: bool) -> ModelConfig:
+    def make(thinking: bool) -> ModelConfig:
         suffix = "think" if thinking else "nothink"
         temp, top_p = (0.6, 0.95) if thinking else (0.7, 0.8)
         return ModelConfig(
-            name=f"{label}-mtp-{suffix}" if mtp else f"{label}-{suffix}",
-            hf=f"{mtp_repo if mtp else base_repo}:{gguf}",
+            name=f"{label}-mtp-{suffix}",
+            hf=f"{mtp_repo}:{gguf}",
             temperature=temp,
             top_p=top_p,
             top_k=20,
+            presence_penalty=think_presence_penalty if thinking else 1.5,
             thinking=thinking,
-            server_args=extra_args + _MTP_ARGS if mtp else extra_args,
+            server_args=extra_args + _MTP_ARGS,
         )
 
-    return [make(thinking, mtp) for thinking in (True, False) for mtp in (False, True)]
+    return [make(thinking) for thinking in (True, False)]
+
+
+def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[ModelConfig]:
+    """think + nothink configs for one Gemma 4 model (Gemma sampling defaults).
+
+    Gemma 4 (unlike Gemma 3) has an enable_thinking toggle. We run both modes: measured
+    per-category, thinking is worth +3..+9 (math_modular/multistep, reasoning) on every size
+    except 26b-a4b (ceiling either way), at 10-25x wall time but no timeouts. Keeping both
+    makes that tradeoff explicit, the same way the Qwen think/nothink pairs do.
+    """
+    return [
+        ModelConfig(name=f"{label}-think", hf=hf, thinking=True, server_args=extra_args),
+        ModelConfig(name=f"{label}-nothink", hf=hf, thinking=False, server_args=extra_args),
+    ]
 
 
 MODELS: list[ModelConfig] = [
-    # Gemma 4 (Google) -- no thinking mode, no MTP head: a single config each.
-    # temp=1.0, top_p=0.95, top_k=64 (Gemma defaults on ModelConfig).
-    ModelConfig(
-        name="gemma-4-e2b-Q8_0",
-        hf="ggml-org/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf",
+    # Gemma 4 (Google) -- no MTP head; each runs a think + nothink pair (see _gemma_pair).
+    # temp=1.0, top_p=0.95, top_k=64 (Gemma cards, all use cases). e2b/e4b are Q8_0/Q4_K_M;
+    # 12b/31b are official QAT q4_0; 26b-a4b is a 26B/4B-active MoE. The 31B uses -c 8192 to
+    # keep f16 KV within the working set; the rest fit at default ctx.
+    *_gemma_pair("gemma-4-e2b-Q8_0", "ggml-org/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf"),
+    *_gemma_pair("gemma-4-e4b-Q4_K_M", "ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf"),
+    *_gemma_pair("gemma-4-12b-qat-q4_0", "google/gemma-4-12B-it-qat-q4_0-gguf:gemma-4-12b-it-qat-q4_0.gguf"),
+    *_gemma_pair("gemma-4-26b-a4b-Q4_K_M", "ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf"),
+    *_gemma_pair(
+        "gemma-4-31b-qat-q4_0",
+        "google/gemma-4-31B-it-qat-q4_0-gguf:gemma-4-31B_q4_0-it.gguf",
+        extra_args=("-c", "8192"),
     ),
-    ModelConfig(
-        name="gemma-4-e4b-Q4_K_M",
-        hf="ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf",
-    ),
-    # Gemma 4 12B dense (Google, 2026) -- official QAT q4_0 (~6.5 GB). Fills the gap between
-    # e4b and 26b-a4b; fits default ctx.
-    ModelConfig(
-        name="gemma-4-12b-qat-q4_0",
-        hf="google/gemma-4-12B-it-qat-q4_0-gguf:gemma-4-12b-it-qat-q4_0.gguf",
-    ),
-    # Gemma 4 26B-A4B MoE -- 26B total / 4B active. Q4_K_M ~16.8 GB.
-    # Was OOM on the old 16 GB machine; fits the 32 GB / ~25 GB working set at default ctx.
-    ModelConfig(
-        name="gemma-4-26b-a4b-Q4_K_M",
-        hf="ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf",
-    ),
-    # Gemma 4 31B dense (Google, 2026) -- official QAT q4_0 (~17.7 GB).
-    # QAT (quantization-aware training) is typically more accurate at 4-bit than a
-    # post-hoc Q4_K_M. -c 8192 keeps f16 KV within the working set.
-    ModelConfig(
-        name="gemma-4-31b-qat-q4_0",
-        hf="google/gemma-4-31B-it-qat-q4_0-gguf:gemma-4-31B_q4_0-it.gguf",
-        server_args=("-c", "8192"),
-    ),
-    # Qwen full matrix: {think, nothink} x {non-MTP, MTP}, 4 configs each.
+    # Qwen: {think, nothink}, both MTP (non-MTP dropped -- MTP strictly dominated the A/B).
     # Qwen3.5 small (Q8_0) fits at default ctx; Qwen 3.6 27B (Q4_K_M ~16.8 GB) uses -c 8192.
-    # 0.8B dropped: too small to think productively (loops/timeouts, net loss). The MTP
-    # heads ship in the -MTP repos for the whole Qwen 3.5/3.6 line.
-    *_qwen_matrix("qwen3.5-2b-Q8_0", "unsloth/Qwen3.5-2B-GGUF", "unsloth/Qwen3.5-2B-MTP-GGUF", "Qwen3.5-2B-Q8_0.gguf"),
-    *_qwen_matrix("qwen3.5-4b-Q8_0", "unsloth/Qwen3.5-4B-GGUF", "unsloth/Qwen3.5-4B-MTP-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
-    *_qwen_matrix("qwen3.5-9b-Q8_0", "unsloth/Qwen3.5-9B-GGUF", "unsloth/Qwen3.5-9B-MTP-GGUF", "Qwen3.5-9B-Q8_0.gguf"),
+    # 0.8B dropped: too small to think productively (loops/timeouts, net loss).
+    *_qwen_matrix("qwen3.5-2b-Q8_0", "unsloth/Qwen3.5-2B-MTP-GGUF", "Qwen3.5-2B-Q8_0.gguf"),
+    *_qwen_matrix("qwen3.5-4b-Q8_0", "unsloth/Qwen3.5-4B-MTP-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
+    *_qwen_matrix("qwen3.5-9b-Q8_0", "unsloth/Qwen3.5-9B-MTP-GGUF", "Qwen3.5-9B-Q8_0.gguf"),
     *_qwen_matrix(
         "qwen3.6-27b-Q4_K_M",
-        "unsloth/Qwen3.6-27B-GGUF",
         "unsloth/Qwen3.6-27B-MTP-GGUF",
         "Qwen3.6-27B-Q4_K_M.gguf",
         extra_args=("-c", "8192"),
+        think_presence_penalty=0.0,  # 27B card: presence_penalty 0.0 for thinking (vs 1.5 on the small 3.5)
     ),
-    # Other families -- single instruct config each (no Qwen-style enable_thinking toggle,
-    # no MTP head). Sampling from each model card where given, else neutral defaults
-    # (temp>0 so the n=3 sampling actually varies).
-    # Mistral Ministral 3 (Apache-2.0). Card: temp<0.1 for production; top_p/top_k
-    # unspecified, left neutral.
+    # Other families -- single instruct config each, no MTP head. Sampling from each model
+    # card; values verified against the official cards (see per-model notes).
+    # Mistral Ministral 3 (Apache-2.0). Card: temp BELOW 0.1 for production (we use 0.07);
+    # top_p/top_k/penalties unspecified, left neutral. Instruct (not the Reasoning SKU).
     ModelConfig(
         name="ministral-3-8b-Q8_0",
         hf="mistralai/Ministral-3-8B-Instruct-2512-GGUF:Ministral-3-8B-Instruct-2512-Q8_0.gguf",
-        temperature=0.15,
+        temperature=0.07,
         top_p=1.0,
         top_k=0,
     ),
     ModelConfig(
         name="ministral-3-14b-Q4_K_M",
         hf="mistralai/Ministral-3-14B-Instruct-2512-GGUF:Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
-        temperature=0.15,
+        temperature=0.07,
         top_p=1.0,
         top_k=0,
     ),
     # Microsoft Phi-4-mini-instruct (MIT, text-only, standard instruct -- not reasoning).
-    # Card gives no sampling rec; neutral defaults.
+    # Card publishes no sampling preset; its only shown setting is greedy (temperature=0.0,
+    # do_sample=False), which is also the most reproducible for a benchmark. At temp 0 the
+    # n=3 samples are identical -- acceptable (deterministic pass/fail).
     ModelConfig(
         name="phi-4-mini-Q8_0",
         hf="unsloth/Phi-4-mini-instruct-GGUF:Phi-4-mini-instruct.Q8_0.gguf",
-        temperature=0.7,
-        top_p=0.95,
-        top_k=64,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
     ),
     # Zhipu GLM-4.7-Flash (MIT, text-only) -- 30B-A3B MoE (3B active, so fast despite size).
-    # Q4_K_M ~18.3 GB; -c 8192 keeps f16 KV in the working set. Card: temp=1.0, top_p=0.95.
+    # Q4_K_M ~18.3 GB; -c 8192 keeps f16 KV in the working set. Card: temp=1.0, top_p=0.95
+    # (no top_k published -> top_k=0). Thinking is hybrid and defaults to ENABLED; its toggle
+    # is z.ai's `thinking:{type}` object, NOT enable_thinking, so our kwarg is a no-op for GLM
+    # -- it runs thinking on (the documented default) across all categories.
     ModelConfig(
         name="glm-4.7-flash-Q4_K_M",
         hf="unsloth/GLM-4.7-Flash-GGUF:GLM-4.7-Flash-Q4_K_M.gguf",
         temperature=1.0,
         top_p=0.95,
-        top_k=64,
+        top_k=0,
         server_args=("-c", "8192"),
     ),
     # Liquid AI LFM2.5-8B-A1B (lfm1.0 license, text-only) -- edge MoE, 8B total / 1.5B
     # active, so decode is fast despite size. Q8_0 ~9.0 GB. Card: temp=0.2, top_k=80,
-    # repetition_penalty=1.05 (no per-config repetition_penalty field; top_p left neutral).
+    # repetition_penalty=1.05 (their documented anti-repetition knob; top_p left neutral).
     ModelConfig(
         name="lfm2.5-8b-a1b-Q8_0",
         hf="LiquidAI/LFM2.5-8B-A1B-GGUF:LFM2.5-8B-A1B-Q8_0.gguf",
         temperature=0.2,
         top_p=1.0,
         top_k=80,
+        repetition_penalty=1.05,
     ),
     # JetBrains Mellum2-12B-A2.5B-Thinking (Apache-2.0, text/coding) -- coding MoE, 12B
     # total / 2.5B active, emits native <think> blocks (stripped before verify). Q4_K_M
-    # ~8.1 GB. Card: temp=0.6, top_p=0.95, top_k=20. enable_thinking kwarg is not sent
-    # (non-Qwen); thinking stays on by default so it gets the 16384-token budget.
+    # ~8.1 GB. Card: temp=0.6, top_p=0.95, top_k=20 (exact match). Always thinks; the
+    # enable_thinking kwarg we send is ignored (no toggle), thinking stays on.
     ModelConfig(
         name="mellum2-12b-a2.5b-think-Q4_K_M",
         hf="JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M:Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf",
@@ -748,9 +761,14 @@ def _chat(
         "top_k": model_cfg.top_k,
         # Qwen team recommendation: explicitly pin min_p=0 (server default may clip the tail).
         "min_p": 0,
+        "presence_penalty": model_cfg.presence_penalty,
+        # llama.cpp's native name for repetition_penalty (1.0 = off).
+        "repeat_penalty": model_cfg.repetition_penalty,
+        # Send enable_thinking explicitly both ways: models with a thinking toggle
+        # (Qwen3, Gemma 4) honor it; models without one (Ministral, Phi, LFM, Mellum)
+        # ignore the unknown kwarg. Leaving it unset would run them at template default.
+        "chat_template_kwargs": {"enable_thinking": thinking},
     }
-    if not thinking:
-        req_body["chat_template_kwargs"] = {"enable_thinking": False}
     payload = json.dumps(req_body, ensure_ascii=False).encode()
 
     req = urllib.request.Request(
