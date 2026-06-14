@@ -93,6 +93,14 @@ gate is meaningful: `-think` configs run the structured prompts direct.
 Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
 cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
 
+**Evaluating accuracy-affecting toggles (think/no-think, sampling): run BOTH variants and
+read per-category, never judge from the aggregate.** Both Gemma 4 and Qwen run a
+think/nothink pair for exactly this reason. A mistake made here: "Gemma thinking only
+slows it, no accuracy gain" was concluded from an aggregate (35 vs 36) compared against a
+non-comparable older prompt set; the per-category data actually showed thinking is worth
++6..+9 on dense small/mid Gemma (it rescues math_modular/multistep and reasoning). The
+aggregate hid it because `structured` is at ceiling for everyone and dilutes the signal.
+
 ## Result files
 
 - `results/benchmark.json` -- aggregated raw results (latest run, all models)
