@@ -6,8 +6,8 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 
 | Model | Parameters | Quant | Release | Announcement |
 |-------|-----------|-------|---------|--------------|
-| [Gemma 4 E2B](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF) | 2B effective | Q8_0 | March 2025 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
-| [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF) | 4B effective | Q4_K_M | March 2025 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 E2B](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF) | 2B effective | Q8_0 | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF) | 4B effective | Q4_K_M | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
 | [Qwen3.5-2B](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 2B | Q8_0 | March 2026 | [Qwen3.5 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 4B | Q8_0 | March 2026 | same |
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
@@ -118,14 +118,15 @@ are cached, so the bench loads via local `-m` paths it discovers under
 # Install project dependencies
 uv sync
 
-# Run full benchmark (n=3 samples per prompt, ~1-2 hours total)
+# Run full benchmark (n=3 samples per prompt, ~5-6 hours for all 24 configs;
+# the 27B-think and Gemma-31B-think configs dominate the wall time)
 uv run python benchmark.py
 
-# Run only one model variant (substring match)
+# Run one model's configs (substring match -- e.g. both gemma-4-e2b modes)
 uv run python benchmark.py --model gemma-4-e2b
 
-# Run all thinking variants only
-uv run python benchmark.py --model Q8_0-think
+# Run only the thinking configs (Gemma + Qwen)
+uv run python benchmark.py --model -think
 
 # Smaller sample size for a quick smoke test
 uv run python benchmark.py -n 1
@@ -281,39 +282,3 @@ See `results/COMPARISON.md` for the full table and per-model breakdown.
 - **think vs no-think is compared on the same MTP model.** Both modes run the same
   12-prompt core (`/36` at n=3) from the same MTP GGUF, so any pass-total difference is a
   real mode effect, not a prompt-set or build artifact.
-
-### Summary on M4 16GB, n=3 (April 2026 baseline -- prior 16 GB machine)
-
-These are the prior-machine results, kept as a baseline. The new candidate models
-(Gemma 4 26B-A4B, Qwen 3.6 27B + its MTP A/B) are not yet run; rerun on the M5 to refresh.
-
-| Model | Score | % | Wall time | tok/s (gen) |
-|---|---|---|---|---|
-| **Gemma 4 E2B Q8** | **48/48** | **100%** | 456s | 31.5 |
-| Gemma 4 E4B Q4_K_M | 44/48 | 92% | 341s | 22.1 |
-| Qwen3.5-0.8B nothink | 35/48 | 73% | 25s | 48.1 |
-| Qwen3.5-0.8B think | 28/48 | 58% | 305s | 56.5 |
-| Qwen3.5-2B nothink | 39/48 | 81% | 34s | 35.8 |
-| Qwen3.5-2B think | 44/48 | 92% | 800s | 35.7 |
-| Qwen3.5-4B nothink | 40/48 | 83% | 56s | 17.6 |
-| **Qwen3.5-4B think** | **47/48** | **98%** | 1172s | 17.5 |
-
-`tok/s (gen)` excludes attempts that emit fewer than 50 tokens (warmup-dominated).
-`Wall time` is sum of all 48 attempt elapsed times for that model.
-
-### Pareto frontier
-
-- **Speed for accuracy**: Qwen3.5-2B nothink (39/48, 81% in 34s) -- best $ per pass
-- **Best accuracy small**: Gemma 4 E2B (48/48, 100% in 456s)
-- **Highest accuracy overall**: Qwen3.5-4B think (47/48, 98% in 1172s) -- 20x slower than nothink
-
-### Observations
-
-- Qwen3.5 thinking on `<= 2B` is a net loss -- the model loops on translation prompts
-  and times out, costing 90% of wall time on three failed translations per model.
-- Qwen3.5-4B think is the only Qwen variant that beats both Gemma E4B and its own
-  no-think counterpart (96% vs 83%).
-- 9B nothink (43/48, 90%) is no better than 2B nothink and 3x slower; 9B think
-  was not run to completion.
-- The penguin syllogism (`logic_syllogism_no`) trips bigger Qwen models -- they
-  override the formal "yes follows from premises" with real-world knowledge.

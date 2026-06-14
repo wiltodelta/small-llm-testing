@@ -12,9 +12,9 @@ uv sync
 # Run full benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
-# Filter to a single model variant (substring match)
-uv run python benchmark.py --model gemma-4-e2b
-uv run python benchmark.py --model Q8_0-think    # all thinking variants
+# Filter by substring match
+uv run python benchmark.py --model gemma-4-e2b   # both gemma-4-e2b modes
+uv run python benchmark.py --model -think        # all thinking configs (Gemma + Qwen)
 
 # Quick smoke test
 uv run python benchmark.py -n 1
