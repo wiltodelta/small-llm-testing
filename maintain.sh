@@ -9,3 +9,4 @@ uv run uv-secure --ignore-unfixed
 uv run ruff check --fix
 uv run ruff format
 uv run pyright
+uv run pytest -n auto

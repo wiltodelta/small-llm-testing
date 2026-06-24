@@ -12,11 +12,11 @@ import textwrap
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 HF_HUB_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
 SERVER_STARTUP_TIMEOUT = 300  # seconds -- 27B models take longer to mmap
-REQUEST_TIMEOUT = 120  # cap per request -- thinking-mode loops on translation prompts; fail fast
+REQUEST_TIMEOUT = 120  # cap per request -- think-mode can run long / loop; fail fast instead of hanging
 DEFAULT_PORT = 8080
 DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperature noise
 PYEXEC_TIMEOUT = 5  # seconds budget per coding test execution
@@ -221,6 +221,11 @@ class Prompt:
 
 # ---- verifier helpers --------------------------------------------------------
 
+# Fixed verifier patterns, compiled once (each runs on every attempt across the suite).
+_THINK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", flags=re.DOTALL)
+
 
 def _strip_think(text: str) -> str:
     """Strip Qwen3 <think>...</think> blocks before checking the answer.
@@ -228,7 +233,7 @@ def _strip_think(text: str) -> str:
     Llama-server already strips closed think blocks into a separate field, but if
     the model dumps thinking in content (some templates do) we still want the answer.
     """
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return _THINK_RE.sub("", text).strip()
 
 
 def v_regex(pattern: str, *, flags: int = re.IGNORECASE) -> Verifier:
@@ -252,7 +257,7 @@ def v_number(expected: float, tol: float = 1e-6) -> Verifier:
         if not ans:
             return False, "empty"
         # Find all decimal numbers in the answer (handles negatives and decimals).
-        for m in re.finditer(r"-?\d+(?:\.\d+)?", ans):
+        for m in _NUMBER_RE.finditer(ans):
             try:
                 val = float(m.group())
             except ValueError:
@@ -292,7 +297,7 @@ def v_python_exec(test_cases: list[tuple[str, object]]) -> Verifier:
     def extract_code(text: str) -> str:
         ans = _strip_think(text)
         # Prefer fenced ```python ... ``` blocks; fall back to first ``` block.
-        m = re.search(r"```(?:python)?\s*\n(.*?)```", ans, flags=re.DOTALL)
+        m = _CODE_FENCE_RE.search(ans)
         if m:
             return m.group(1)
         return ans  # raw response, hope it's parseable Python
@@ -308,7 +313,7 @@ def v_python_exec(test_cases: list[tuple[str, object]]) -> Verifier:
             exec(compile(_USER_CODE_, '<llm>', 'exec'), ns)
         """).strip()
         # We pass user code via a sentinel substitution to avoid shell quoting issues.
-        runner = "_USER_CODE_ = " + json.dumps(code) + "\n" + prefix + "\nresults = []\n"
+        runner = f"_USER_CODE_ = {json.dumps(code)}\n{prefix}\nresults = []\n"
         for call, want in test_cases:
             runner += (
                 f"try:\n"
@@ -566,6 +571,13 @@ class Attempt:
     fail_reason: str = ""
 
 
+def _gen_tok_per_s(attempts: Iterable[Attempt]) -> float:
+    """tok/s over attempts that produced >=50 tokens (warmup-free); 0.0 if none qualify."""
+    long_attempts = [a for a in attempts if a.tokens >= 50 and a.time_s > 0]
+    secs = sum(a.time_s for a in long_attempts)
+    return sum(a.tokens for a in long_attempts) / secs if secs > 0 else 0.0
+
+
 @dataclass
 class PromptResult:
     prompt_name: str
@@ -594,13 +606,7 @@ class PromptResult:
 
     @property
     def gen_tok_per_s(self) -> float:
-        """tok/s computed only over attempts that produced >=50 tokens (warmup-free)."""
-        long_attempts = [a for a in self.attempts if a.tokens >= 50 and a.time_s > 0]
-        if not long_attempts:
-            return 0.0
-        toks = sum(a.tokens for a in long_attempts)
-        secs = sum(a.time_s for a in long_attempts)
-        return toks / secs if secs > 0 else 0.0
+        return _gen_tok_per_s(self.attempts)
 
 
 @dataclass
@@ -611,7 +617,7 @@ class ModelResult:
 
     @property
     def passes(self) -> int:
-        """Sum of pass-rates across prompts (e.g. 6.67 / 14)."""
+        """Total passing attempts across all prompts (out of attempts_total, e.g. 31 / 36)."""
         return sum(p.passes for p in self.prompts)
 
     @property
@@ -624,12 +630,7 @@ class ModelResult:
 
     @property
     def gen_tok_per_s(self) -> float:
-        long_attempts = [a for p in self.prompts for a in p.attempts if a.tokens >= 50 and a.time_s > 0]
-        if not long_attempts:
-            return 0.0
-        toks = sum(a.tokens for a in long_attempts)
-        secs = sum(a.time_s for a in long_attempts)
-        return toks / secs if secs > 0 else 0.0
+        return _gen_tok_per_s(a for p in self.prompts for a in p.attempts)
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +752,7 @@ def _chat(
     """
     api_url = API_URL.format(port=port)
     # Qwen3 thinking mode needs much more headroom: official guidance is up to 32k for
-    # general tasks, 80k+ for math/code. 4k overflows even the 0.8B inside <think>.
+    # general tasks, 80k+ for math/code. 4k overflows even small models inside <think>.
     max_tokens = 16384 if thinking else 4096
     req_body: dict[str, object] = {
         "messages": messages,
@@ -809,7 +810,7 @@ def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attem
     try:
         text, tokens, elapsed = _chat(prompt.messages, model_cfg, port, thinking=_thinks(model_cfg, prompt))
     except Exception as e:
-        log.warning("    api error: %s", e)
+        log.warning("    api error on %s/%s: %s", model_cfg.name, prompt.name, e)
         return Attempt(tokens=0, time_s=0.0, response="", ok=False, fail_reason=f"api error: {type(e).__name__}")
     ok, reason = prompt.verify(text)
     return Attempt(tokens=tokens, time_s=round(elapsed, 2), response=text, ok=ok, fail_reason=reason)
@@ -854,14 +855,11 @@ def run_benchmark(
             _save_json(results)
             _save_markdown(results)
             per_model_path = RESULTS_DIR / f"benchmark.{model.name}.json"
-            per_model_path.write_text(
-                json.dumps(
-                    {"timestamp": datetime.now(tz=UTC).isoformat(), "models": [_model_to_dict(mr)]},
-                    indent=2,
-                    ensure_ascii=False,
-                )
-                + "\n",
-            )
+            per_model_data: BenchmarkData = {
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "models": [_model_to_dict(mr)],
+            }
+            per_model_path.write_text(json.dumps(per_model_data, indent=2, ensure_ascii=False) + "\n")
             log.info("Saved per-model results: %s", per_model_path)
         finally:
             _stop_server(proc)
@@ -874,7 +872,44 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 
-def _model_to_dict(r: ModelResult) -> dict[str, object]:
+# On-disk schema for benchmark.json / benchmark.<model>.json. Shared with make_comparison.py
+# so the producer (_model_to_dict) and the consumer are type-checked against one definition --
+# renaming a key here surfaces as a pyright error on the reader, not a silent KeyError at runtime.
+class AttemptDict(TypedDict):
+    tokens: int
+    time_s: float
+    ok: bool
+    fail_reason: str
+    response: str
+
+
+class PromptDict(TypedDict):
+    name: str
+    category: str
+    passes: int
+    n: int
+    pass_rate: float
+    total_tokens: int
+    total_time_s: float
+    attempts: list[AttemptDict]
+
+
+class ModelDict(TypedDict):
+    model: str
+    hf_id: str
+    passes: int
+    attempts_total: int
+    total_time_s: float
+    gen_tok_per_s: float
+    prompts: list[PromptDict]
+
+
+class BenchmarkData(TypedDict):
+    timestamp: str
+    models: list[ModelDict]
+
+
+def _model_to_dict(r: ModelResult) -> ModelDict:
     return {
         "model": r.model_name,
         "hf_id": r.hf_id,
@@ -909,7 +944,7 @@ def _model_to_dict(r: ModelResult) -> dict[str, object]:
 
 def _save_json(results: list[ModelResult]) -> Path:
     path = RESULTS_DIR / "benchmark.json"
-    data = {
+    data: BenchmarkData = {
         "timestamp": datetime.now(tz=UTC).isoformat(),
         "models": [_model_to_dict(r) for r in results],
     }
@@ -930,6 +965,12 @@ def fail_kind(reason: str) -> str:
     return "wrong"
 
 
+def count_fail_kinds(fail_reasons: Iterable[str]) -> tuple[int, int, int]:
+    """Count failed-attempt reasons as a (wrong, timeout, empty) tuple via fail_kind."""
+    kinds = [fail_kind(r) for r in fail_reasons]
+    return kinds.count("wrong"), kinds.count("timeout"), kinds.count("empty")
+
+
 def _save_markdown(results: list[ModelResult]) -> Path:
     path = RESULTS_DIR / "RESULTS.md"
     lines: list[str] = [
@@ -947,8 +988,7 @@ def _save_markdown(results: list[ModelResult]) -> Path:
         "|---|---|---|---|---|",
     ]
     for r in results:
-        fails = [fail_kind(a.fail_reason) for p in r.prompts for a in p.attempts if not a.ok]
-        w, t, e = (fails.count("wrong"), fails.count("timeout"), fails.count("empty"))
+        w, t, e = count_fail_kinds(a.fail_reason for p in r.prompts for a in p.attempts if not a.ok)
         lines.append(
             f"| {r.model_name} | {r.passes}/{r.attempts_total} | {w}/{t}/{e} | "
             f"{r.total_time_s:.1f}s | {r.gen_tok_per_s:.1f} |"

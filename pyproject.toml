@@ -8,6 +8,8 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pyright>=1.1.410",
+    "pytest>=8.3",
+    "pytest-xdist>=3.6",
     "ruff>=0.15.18",
     "uv-outdated>=0.1",
     "uv-secure>=0.17.2",
@@ -27,13 +29,31 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["G004", "S108", "S310", "T20"]
-"tests/*.py" = ["S105", "S106", "S108"]
+"tests/*.py" = ["S101", "S105", "S106", "S108"]  # tests: allow assert, hardcoded creds, /tmp
 "benchmark.py" = ["S310", "S603"]  # local benchmark: urllib to localhost, subprocess for llama-server
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+
+# Tests use mock patterns that produce false positives -- relax only for tests.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["."]
+reportPrivateUsage = false
+reportAttributeAccessIssue = false
+reportOptionalSubscript = false
+reportOptionalMemberAccess = false
+reportArgumentType = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportMissingTypeArgument = false

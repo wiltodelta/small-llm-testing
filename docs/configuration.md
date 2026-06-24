@@ -18,5 +18,5 @@
   (llama-bench Qwen3.6-27B: 6.32 vs 3.72 tg t/s). Quantized K on Metal is costly.
   q8_0 KV was a 16 GB-machine memory hack -- do not re-add it.
 - llama-server binary: `/opt/homebrew/bin/llama-server`
-- `REQUEST_TIMEOUT = 120` -- thinking models loop on translation prompts; fail fast
+- `REQUEST_TIMEOUT = 120` -- think-mode can run long / loop; fail fast instead of hanging
 - `DEFAULT_N_RUNS = 3` -- each prompt sampled this many times to average out temperature

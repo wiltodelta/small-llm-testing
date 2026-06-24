@@ -13,20 +13,18 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
-from benchmark import fail_kind
+from benchmark import BenchmarkData, ModelDict, count_fail_kinds
 
 log = logging.getLogger(__name__)
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
-def _fail_counts(model: Any) -> tuple[int, int, int]:
-    kinds = [fail_kind(a["fail_reason"]) for p in model["prompts"] for a in p["attempts"] if not a["ok"]]
-    return kinds.count("wrong"), kinds.count("timeout"), kinds.count("empty")
+def _fail_counts(model: ModelDict) -> tuple[int, int, int]:
+    return count_fail_kinds(a["fail_reason"] for p in model["prompts"] for a in p["attempts"] if not a["ok"])
 
 
-def _think_pairs(models: dict[str, Any]) -> list[str]:
+def _think_pairs(models: dict[str, ModelDict]) -> list[str]:
     """Base labels that have BOTH a `-think` and a `-nothink` config (Gemma and Qwen).
 
     The base is the name minus the trailing `-think` (e.g. `gemma-4-e2b-Q8_0` or
@@ -43,8 +41,10 @@ def _think_pairs(models: dict[str, Any]) -> list[str]:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    data: Any = json.loads((RESULTS_DIR / "benchmark.json").read_text())
-    models: dict[str, Any] = {m["model"]: m for m in data["models"]}
+    # json.loads is Any at the boundary; we trust benchmark.json matches the schema written by
+    # benchmark._save_json. From here on the typed view lets pyright check every key access.
+    data: BenchmarkData = json.loads((RESULTS_DIR / "benchmark.json").read_text())
+    models: dict[str, ModelDict] = {m["model"]: m for m in data["models"]}
 
     lines: list[str] = [
         "# Benchmark comparison",
