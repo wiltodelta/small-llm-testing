@@ -11,7 +11,7 @@
   - `thinking: bool` -- gates whether this config thinks on `THINKING_CATEGORIES`. `_chat`
     sends `chat_template_kwargs={"enable_thinking": <thinking>}` on EVERY request: models with
     a toggle (Qwen3, Gemma 4) honor it; GLM (its toggle is `thinking:{type}`, not enable_thinking)
-    and toggle-less models (Ministral/Phi/LFM/Mellum) ignore the kwarg and run at their default.
+    and toggle-less models (Ministral/LFM/Mellum) ignore the kwarg and run at their default.
   - `server_args` -- per-model llama-server overrides (e.g. `-c 8192` for the ~17-22 GB
     models). MTP speculative decoding: all Qwen (and Ornith) use the `-MTP` GGUF (head embedded) with
     `--spec-type draft-mtp` in server_args; all Gemma load from Unsloth GGUFs that carry a
@@ -21,9 +21,9 @@
 - A model whose server fails to start (unsupported arch, OOM, bad file) is logged and
   skipped by `run_benchmark`, not allowed to crash the whole run. Pass `--port 8081` (etc.)
   if 8080 is taken by another dev server.
-- Laguna-XS-2.1 requires llama.cpp >= 10090 (arch support: PR #25165). On Apple Metal it
-  returns empty output (f16 overflow in the MoE down-projection; fix PR #25442 open) --
-  expect empty fails on this machine until the fix lands.
+- Laguna-XS-2.1 was measured and dropped: arch works (llama.cpp >= 10090, PR #25165) but
+  the Metal f16 overflow in its MoE down-projection returns empty output for most prompts
+  (21/36 empty think, 6/36 nothink on 2026-07-23). Re-add when upstream PR #25442 lands.
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
   `-ngl 99 -fa on -ub 1024 -c 16384`. KV cache stays at the f16 default (NOT q8_0):
   on 32 GB everything fits, and f16 KV is ~1.7x faster decode than q8_0 on this M5

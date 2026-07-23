@@ -8,7 +8,7 @@ coding (3, executed), structured (2). Every config is scored on the same prompts
 (math_div, math_percent, logic_syllogism_yes, code_total, both translations) and the
 brittle substring `summarize` were dropped (no signal, ceiling). Vision (3 chart-OCR
 prompts) was removed too: it was supported unevenly across the model set (text-only for
-Qwen-MTP / Phi / GLM / LFM / Mellum, and the Gemma 4 12B QAT mmproj fails to load), and
+Qwen-MTP / GLM / LFM / Mellum, and the Gemma 4 12B QAT mmproj fails to load), and
 the mmproj path was a recurring source of server-start failures. The `structured`
 category (JSON extraction + strict-format output) probes instruction-following /
 function-calling -- the strength of agentic models (Ministral / GLM / Qwen3.6) that the

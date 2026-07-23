@@ -18,13 +18,11 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 | [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | 35B total / 3B active (MoE) | UD-Q4_K_M + MTP (~21 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Ministral 3 8B](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) | 8B | Q8_0 (~9 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
 | [Ministral 3 14B](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF) | 14B | Q4_K_M (~8.2 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
-| [Phi-4-mini](https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF) | 3.8B | Q8_0 (~4 GB) | 2026 | Microsoft (MIT) |
 | [GLM-4.7-Flash](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | 30B-A3B MoE (3B active) | Q4_K_M (~18.3 GB) | 2026 | Zhipu (MIT) |
 | [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | 8B total / 1.5B active (MoE) | Q8_0 (~9 GB) | 2026 | Liquid AI (lfm1.0) |
 | [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | 12B total / 2.5B active (MoE, coding) | Q4_K_M (~8.1 GB) | 2026 | JetBrains (Apache-2.0) |
 | [Granite 4.1-8b](https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF) | ~8B | Q8_0 (~9 GB) | 2026 | IBM (Apache-2.0) |
 | [Ornith-1.0-35B](https://huggingface.co/SEBK4C/Ornith-1.0-35B-MTP-GGUF) | 35B total / ~3B active (MoE, coding) | Q4_K_M + MTP (~21.7 GB) | 2026 | DeepReinforce (MIT) |
-| [Laguna-XS-2.1](https://huggingface.co/poolside/Laguna-XS-2.1-GGUF) | 33B total / 3B active (MoE, coding) | Q4_K_M (~20.3 GB) | 2026 | poolside (OpenMDW-1.1) |
 
 Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so the
 two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
@@ -44,15 +42,11 @@ worth +3..+9 for Gemma (math_modular/multistep, reasoning) on every size except 
 (ceiling either way), at higher wall time but no timeouts. Gemma is loaded from **Unsloth
 GGUFs, which ship a separate `mtp-*.gguf` MTP draft head** that the harness auto-attaches
 for lossless multi-token-prediction speculative decoding (measured 1.2-2.1x faster, e.g.
-e2b-think 34 -> 73 tok/s, byte-identical output). Ornith and Laguna run a think + nothink
-pair each (both honor `enable_thinking`). The other families (Ministral 3,
-Phi-4-mini, GLM-4.7-Flash, LFM2.5, Mellum2, Granite 4.1) run one config each with no MTP;
-GLM and LFM2.5/Mellum reason by default, Ministral/Phi/Granite are plain instruct. The
+e2b-think 34 -> 73 tok/s, byte-identical output). Ornith also runs a think + nothink pair
+(it honors `enable_thinking`). The other families (Ministral 3,
+GLM-4.7-Flash, LFM2.5, Mellum2, Granite 4.1) run one config each with no MTP;
+GLM and LFM2.5/Mellum reason by default, Ministral/Granite are plain instruct. The
 suite is text-only (see Test set below).
-
-Laguna-XS-2.1 needs llama.cpp >= 10090 (arch support merged in PR #25165). On Apple Metal
-it currently returns EMPTY output -- an f16 overflow in the MoE down-projection whose fix
-(PR #25442) is still open; expect empty-output fails until it lands.
 
 ### Memory class reference
 
@@ -63,7 +57,9 @@ and the ~17 GB Gemma 31B / 26B-A4B and Qwen 27B -- all fit. Excluded:
 | Model | Status |
 |-------|--------|
 | OLMo 3.1 32B Instruct | Excluded -- its Jinja chat template uses a `tojson` filter llama.cpp could not parse (`Unknown filter 'tojson'`, observed on build 9590, not retested since); would need `--no-jinja` with a hand-picked template, too risky to guess. |
+| Laguna-XS-2.1 33B | Excluded after measurement -- arch support works (llama.cpp >= 10090, PR #25165), but the Metal f16 overflow in its MoE down-projection makes it return EMPTY output for most prompts (2026-07-23 run: 21/36 empty think, 6/36 nothink). Fix is upstream PR #25442; re-add when it lands. |
 | Phi-4-Reasoning 15B | Excluded -- too slow (7.9 tok/s, most prompts timeout). Not a memory limit. |
+| Phi-4-mini | Excluded 2026-07 -- released 2025-02, a generation older than the rest; weakest vendor GPQA of the set (25.2); greedy temp=0 makes n=3 sampling degenerate. Comparison no longer informative. |
 | Zyphra ZAYA1-8B | Excluded -- hybrid-Mamba MoE, no working llama.cpp path (official deploy is a custom vLLM fork); text-only. |
 
 `Gemma 4 26B-A4B` (~16.8 GB) runs at default ctx; `Qwen 3.6 27B` (~16.8 GB) uses
@@ -113,7 +109,6 @@ for repo, files in [
     # Other families.
     ('mistralai/Ministral-3-8B-Instruct-2512-GGUF',  ['Ministral-3-8B-Instruct-2512-Q8_0.gguf']),
     ('mistralai/Ministral-3-14B-Instruct-2512-GGUF', ['Ministral-3-14B-Instruct-2512-Q4_K_M.gguf']),
-    ('unsloth/Phi-4-mini-instruct-GGUF', ['Phi-4-mini-instruct.Q8_0.gguf']),
     ('unsloth/GLM-4.7-Flash-GGUF', ['GLM-4.7-Flash-Q4_K_M.gguf']),
     ('LiquidAI/LFM2.5-8B-A1B-GGUF', ['LFM2.5-8B-A1B-Q8_0.gguf']),
     ('JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M', ['Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf']),
@@ -144,7 +139,7 @@ uv run python benchmark.py --port 8081
 # Run one model's configs (substring match -- e.g. both gemma-4-e2b modes)
 uv run python benchmark.py --model gemma-4-e2b
 
-# Run only the thinking configs (Gemma + Qwen + Ornith + Laguna)
+# Run only the thinking configs (Gemma + Qwen + Ornith)
 uv run python benchmark.py --model -think
 
 # Smaller sample size for a quick smoke test
@@ -186,7 +181,7 @@ All verification is mechanical (no LLM judge): numbers, yes/no, regex, executed 
 parsed JSON.
 
 The 3 chart-OCR **vision** prompts were removed earlier: vision was supported unevenly
-across the set (text-only for Qwen-MTP / Phi / GLM / LFM / Mellum, and the Gemma 4 12B QAT
+across the set (text-only for Qwen-MTP / GLM / LFM / Mellum, and the Gemma 4 12B QAT
 mmproj fails to load on this llama.cpp build), and the `--mmproj` path was a recurring
 source of server-start failures. The suite is uniformly text.
 
@@ -206,9 +201,7 @@ Each model uses parameters verified against its official model card; see `MODELS
 | Qwen thinking | 1.0 | 0.95 | 20 | presence 1.5 (0.0 on 27B) | [Qwen cards](https://qwenlm.github.io/blog/qwen3/) ("general" preset; 0.6/0.95 is the "precise coding" preset) |
 | Qwen no-think | 0.7 | 0.8 | 20 | presence 1.5 | same (2B text: 1.0 / 1.0 / 20, presence 2.0) |
 | Ornith-1.0-35B | think 1.0 / nothink 0.7 | 0.95 / 0.8 | 20 | presence 1.5 | Qwen-family defaults (card: 0.6/0.95/20 examples, no penalty guidance) |
-| Laguna-XS-2.1 | 1.0 | 1.0 | 20 | - | card benchmark setup (thinking on) |
 | Ministral 3 8B/14B | 0.07 | 1.0 | off | - | card: "temperature below 0.1" |
-| Phi-4-mini | 0.0 (greedy) | - | off | - | card shows only `temperature=0.0, do_sample=False` |
 | GLM-4.7-Flash | 1.0 | 0.95 | off | - | z.ai card (no top_k published) |
 | LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | card: temp 0.2, top_k 80, rep 1.05 |
 | Mellum2-12B | 0.6 | 0.95 | 20 | - | card quickstart |
@@ -226,8 +219,6 @@ Notes:
   `enable_thinking` is sent on every request; toggle-less models ignore it. GLM's hybrid
   thinking uses a different
   switch (`thinking:{type}`) and defaults to enabled, so GLM runs thinking-on throughout.
-- **Phi-4-mini** publishes no sampling preset beyond greedy; at temperature 0 the `n=3`
-  samples are identical (deterministic pass/fail), which is fine for this suite.
 
 ## Server flags applied to all models
 

@@ -173,32 +173,11 @@ MODELS: list[ModelConfig] = [
         "ornith-1.0-35b-Q4_K_M-MTP.gguf",
         extra_args=("-c", "8192"),
     ),
-    # poolside Laguna-XS-2.1 (OpenMDW-1.1) -- agentic-coding MoE, 33B total / 3B active,
-    # 256K ctx, native reasoning with an enable_thinking toggle (honored, per card).
-    # Official GGUF Q4_K_M 20.3 GB, -c 8192 keeps f16 KV in the working set; --jinja as in
-    # the card's llama.cpp recipe. Arch support merged via PR #25165, requires llama.cpp
-    # >= 10090. KNOWN ISSUE on Apple Metal: f16 overflow in the MoE down-projection makes
-    # the model return EMPTY output; fix is PR #25442, still open -- expect empty-output
-    # fails on this M5 until it lands. Kept in the list so the run documents it.
-    # Sampling per the card's benchmark setup: temp=1.0, top_p=1.0, top_k=20 (thinking on).
-    ModelConfig(
-        name="laguna-xs-2.1-Q4_K_M-think",
-        hf="poolside/Laguna-XS-2.1-GGUF:Laguna-XS-2.1-Q4_K_M.gguf",
-        temperature=1.0,
-        top_p=1.0,
-        top_k=20,
-        thinking=True,
-        server_args=("--jinja", "-c", "8192"),
-    ),
-    ModelConfig(
-        name="laguna-xs-2.1-Q4_K_M-nothink",
-        hf="poolside/Laguna-XS-2.1-GGUF:Laguna-XS-2.1-Q4_K_M.gguf",
-        temperature=1.0,
-        top_p=1.0,
-        top_k=20,
-        thinking=False,
-        server_args=("--jinja", "-c", "8192"),
-    ),
+    # poolside Laguna-XS-2.1 measured and dropped: arch support works (PR #25165, llama.cpp
+    # >= 10090), but on Apple Metal the MoE down-projection f16 overflow makes the model
+    # return EMPTY output for most prompts (measured 2026-07-23: 21/36 empty in think mode,
+    # 6/36 in nothink). Fix is PR #25442, still open -- re-add when it lands. Card sampling
+    # was temp=1.0/top_p=1.0/top_k=20, enable_thinking honored, --jinja -c 8192.
     # Other families -- single instruct config each, no MTP head. Sampling from each model
     # card; values verified against the official cards (see per-model notes).
     # Mistral Ministral 3 (Apache-2.0). Card: temp BELOW 0.1 for production (we use 0.07);
@@ -217,17 +196,9 @@ MODELS: list[ModelConfig] = [
         top_p=1.0,
         top_k=0,
     ),
-    # Microsoft Phi-4-mini-instruct (MIT, text-only, standard instruct -- not reasoning).
-    # Card publishes no sampling preset; its only shown setting is greedy (temperature=0.0,
-    # do_sample=False), which is also the most reproducible for a benchmark. At temp 0 the
-    # n=3 samples are identical -- acceptable (deterministic pass/fail).
-    ModelConfig(
-        name="phi-4-mini-Q8_0",
-        hf="unsloth/Phi-4-mini-instruct-GGUF:Phi-4-mini-instruct.Q8_0.gguf",
-        temperature=0.0,
-        top_p=1.0,
-        top_k=0,
-    ),
+    # Microsoft Phi-4-mini-instruct dropped 2026-07: released 2025-02, it is a generation
+    # (or two) older than everything else here, weakest vendor GPQA of the set (25.2), and
+    # its greedy temp=0 makes the n=3 sampling degenerate. Comparison no longer informative.
     # Zhipu GLM-4.7-Flash (MIT, text-only) -- 30B-A3B MoE (3B active, so fast despite size).
     # Q4_K_M ~18.3 GB; -c 8192 keeps f16 KV in the working set. Card: temp=1.0, top_p=0.95
     # (no top_k published -> top_k=0). Thinking is hybrid and defaults to ENABLED; its toggle
@@ -851,7 +822,7 @@ def _chat(
         # llama.cpp's native name for repetition_penalty (1.0 = off).
         "repeat_penalty": model_cfg.repetition_penalty,
         # Send enable_thinking explicitly both ways: models with a thinking toggle
-        # (Qwen3, Gemma 4) honor it; models without one (Ministral, Phi, LFM, Mellum)
+        # (Qwen3, Gemma 4) honor it; models without one (Ministral, LFM, Mellum)
         # ignore the unknown kwarg. Leaving it unset would run them at template default.
         "chat_template_kwargs": {"enable_thinking": thinking},
     }
