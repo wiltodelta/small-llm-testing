@@ -21,6 +21,9 @@
 - A model whose server fails to start (unsupported arch, OOM, bad file) is logged and
   skipped by `run_benchmark`, not allowed to crash the whole run. Pass `--port 8081` (etc.)
   if 8080 is taken by another dev server.
+- Laguna-XS-2.1 requires llama.cpp >= 10090 (arch support: PR #25165). On Apple Metal it
+  returns empty output (f16 overflow in the MoE down-projection; fix PR #25442 open) --
+  expect empty fails on this machine until the fix lands.
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
   `-ngl 99 -fa on -ub 1024 -c 16384`. KV cache stays at the f16 default (NOT q8_0):
   on 32 GB everything fits, and f16 KV is ~1.7x faster decode than q8_0 on this M5

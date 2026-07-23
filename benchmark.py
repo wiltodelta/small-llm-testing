@@ -173,6 +173,32 @@ MODELS: list[ModelConfig] = [
         "ornith-1.0-35b-Q4_K_M-MTP.gguf",
         extra_args=("-c", "8192"),
     ),
+    # poolside Laguna-XS-2.1 (OpenMDW-1.1) -- agentic-coding MoE, 33B total / 3B active,
+    # 256K ctx, native reasoning with an enable_thinking toggle (honored, per card).
+    # Official GGUF Q4_K_M 20.3 GB, -c 8192 keeps f16 KV in the working set; --jinja as in
+    # the card's llama.cpp recipe. Arch support merged via PR #25165, requires llama.cpp
+    # >= 10090. KNOWN ISSUE on Apple Metal: f16 overflow in the MoE down-projection makes
+    # the model return EMPTY output; fix is PR #25442, still open -- expect empty-output
+    # fails on this M5 until it lands. Kept in the list so the run documents it.
+    # Sampling per the card's benchmark setup: temp=1.0, top_p=1.0, top_k=20 (thinking on).
+    ModelConfig(
+        name="laguna-xs-2.1-Q4_K_M-think",
+        hf="poolside/Laguna-XS-2.1-GGUF:Laguna-XS-2.1-Q4_K_M.gguf",
+        temperature=1.0,
+        top_p=1.0,
+        top_k=20,
+        thinking=True,
+        server_args=("--jinja", "-c", "8192"),
+    ),
+    ModelConfig(
+        name="laguna-xs-2.1-Q4_K_M-nothink",
+        hf="poolside/Laguna-XS-2.1-GGUF:Laguna-XS-2.1-Q4_K_M.gguf",
+        temperature=1.0,
+        top_p=1.0,
+        top_k=20,
+        thinking=False,
+        server_args=("--jinja", "-c", "8192"),
+    ),
     # Other families -- single instruct config each, no MTP head. Sampling from each model
     # card; values verified against the official cards (see per-model notes).
     # Mistral Ministral 3 (Apache-2.0). Card: temp BELOW 0.1 for production (we use 0.07);
