@@ -14,7 +14,8 @@
   (e.g. a `veedma-landing` Flask `--debug` on 8080). Check `lsof -i :8080`; if it is not
   ours, do NOT kill it -- run the benchmark on the next free port: `benchmark.py --port 8081`.
 - OLMo 3.1 32B fails to start: chat-template error `Unknown filter 'tojson'` (llama.cpp
-  9590 cannot parse its Jinja template). Would need `--no-jinja --chat-template <fmt>` with
+  could not parse its Jinja template; observed on build 9590, not retested since). Would
+  need `--no-jinja --chat-template <fmt>` with
   the right format; left out. Other models with exotic chat templates may hit the same.
 - Do not run a benchmark concurrently with large model downloads. A ~17 GB model in the
   GPU working set plus a multi-GB download piling on memory pressure gets llama-server
