@@ -6,21 +6,23 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 
 | Model | Parameters | Quant | Release | Announcement |
 |-------|-----------|-------|---------|--------------|
-| [Gemma 4 E2B](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF) | 2B effective | Q8_0 | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
-| [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF) | 4B effective | Q4_K_M | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | 2B effective | Q8_0 + MTP | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 E4B](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) | 4B effective | Q4_K_M + MTP | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
 | [Qwen3.5-2B](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 2B | Q8_0 | March 2026 | [Qwen3.5 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 4B | Q8_0 | March 2026 | same |
 | [Qwen3.5-9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) | 9B | Q8_0 | March 2026 | same |
-| [Gemma 4 12B](https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf) | 12B dense | QAT q4_0 (~6.5 GB) | 2026 | Google (Apache-2.0), official QAT GGUF |
-| [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | Q4_K_M (~16.8 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
-| [Gemma 4 31B](https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf) | 31B dense | QAT q4_0 (~17.7 GB) | 2026 | Google (Apache-2.0), official QAT GGUF |
+| [Gemma 4 12B](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) | 12B dense | Q4_K_M + MTP (~6.6 GB) | 2026 | Google (Apache-2.0) |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 26B total / 4B active (MoE) | UD-Q4_K_M + MTP (~17 GB) | 2026 | [Gemma 4: Byte for byte, the most capable open models](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) |
+| [Gemma 4 31B](https://huggingface.co/unsloth/gemma-4-31B-it-qat-GGUF) | 31B dense | QAT UD-Q4_K_XL + MTP (~17 GB) | 2026 | Google (Apache-2.0) |
 | [Qwen 3.6 27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) | 27B dense | Q4_K_M (~16.8 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
+| [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | 35B total / 3B active (MoE) | UD-Q4_K_M + MTP (~21 GB) | 2026 | [Qwen3.6 release](https://qwenlm.github.io/blog/qwen3/) |
 | [Ministral 3 8B](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) | 8B | Q8_0 (~9 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
 | [Ministral 3 14B](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF) | 14B | Q4_K_M (~8.2 GB) | Dec 2025 | Mistral AI (Apache-2.0) |
 | [Phi-4-mini](https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF) | 3.8B | Q8_0 (~4 GB) | 2026 | Microsoft (MIT) |
 | [GLM-4.7-Flash](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | 30B-A3B MoE (3B active) | Q4_K_M (~18.3 GB) | 2026 | Zhipu (MIT) |
 | [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | 8B total / 1.5B active (MoE) | Q8_0 (~9 GB) | 2026 | Liquid AI (lfm1.0) |
 | [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | 12B total / 2.5B active (MoE, coding) | Q4_K_M (~8.1 GB) | 2026 | JetBrains (Apache-2.0) |
+| [Granite 4.1-8b](https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF) | ~8B | Q8_0 (~9 GB) | 2026 | IBM (Apache-2.0) |
 
 Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so the
 two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
@@ -35,22 +37,25 @@ extra speed pulls think-mode coding back under the 120s request timeout. MTP hea
 the whole Qwen 3.5 / 3.6 line.
 
 Gemma 4 (unlike Gemma 3) has an `enable_thinking` toggle, so each Gemma runs a
-**think + nothink pair** (no MTP head) -- the same think/nothink A/B as Qwen. Measured,
-thinking is worth +3..+9 for Gemma (math_modular/multistep, reasoning) on every size
-except 26b-a4b (ceiling either way), at 10-25x wall time but no timeouts. The other
-families (Ministral 3, Phi-4-mini, GLM-4.7-Flash, LFM2.5, Mellum2) run one config each
-with no MTP head; GLM and LFM2.5/Mellum reason by default, Ministral/Phi are plain
-instruct. The suite is text-only (see Test set below).
+**think + nothink pair** -- the same think/nothink A/B as Qwen. Measured, thinking is
+worth +3..+9 for Gemma (math_modular/multistep, reasoning) on every size except 26b-a4b
+(ceiling either way), at higher wall time but no timeouts. Gemma is loaded from **Unsloth
+GGUFs, which ship a separate `mtp-*.gguf` MTP draft head** that the harness auto-attaches
+for lossless multi-token-prediction speculative decoding (measured 1.2-2.1x faster, e.g.
+e2b-think 34 -> 73 tok/s, byte-identical output). The other families (Ministral 3,
+Phi-4-mini, GLM-4.7-Flash, LFM2.5, Mellum2, Granite 4.1) run one config each with no MTP;
+GLM and LFM2.5/Mellum reason by default, Ministral/Phi/Granite are plain instruct. The
+suite is text-only (see Test set below).
 
 ### Memory class reference
 
 The machine has a 32 GB unified-memory budget with a ~25 GB GPU working set (see
-Hardware below). Gemma 4 26B-A4B and Qwen 3.6 27B (each ~16.8 GB) were OOM /
-kernel-panic on the previous 16 GB machine and now fit. Excluded:
+Hardware below). The largest configs -- Qwen 3.6 35B-A3B (~21 GB at `-c 8192`), GLM-4.7-Flash
+and the ~17 GB Gemma 31B / 26B-A4B and Qwen 27B -- all fit. Excluded:
 
 | Model | Status |
 |-------|--------|
-| Qwen 3.6 35B-A3B UD-Q4_K_M (~22.1 GB) | Excluded -- too marginal: model alone is 88% of the working set, leaving <3 GB for KV + compute. A Q3_K_M (~17 GB) quant would fit if needed later. |
+| OLMo 3.1 32B Instruct | Excluded -- its Jinja chat template uses a `tojson` filter llama.cpp 9590 cannot parse (`Unknown filter 'tojson'`); would need `--no-jinja` with a hand-picked template, too risky to guess. |
 | Phi-4-Reasoning 15B | Excluded -- too slow (7.9 tok/s, most prompts timeout). Not a memory limit. |
 | Zyphra ZAYA1-8B | Excluded -- hybrid-Mamba MoE, no working llama.cpp path (official deploy is a custom vLLM fork); text-only. |
 
@@ -83,18 +88,21 @@ the bench timing out during cold-start:
 ```bash
 uv run --with huggingface_hub python -c "
 from huggingface_hub import hf_hub_download
-# Text-only suite: model files only, no mmproj projectors.
+# Text-only suite. Gemma + Qwen pull a main GGUF plus its MTP draft head for speculative
+# decoding (Gemma's draft is a separate mtp-*.gguf the harness auto-attaches; Qwen's is
+# embedded in the -MTP GGUF).
 for repo, files in [
-    ('ggml-org/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf']),
-    ('ggml-org/gemma-4-E4B-it-GGUF', ['gemma-4-E4B-it-Q4_K_M.gguf']),
-    ('google/gemma-4-12B-it-qat-q4_0-gguf', ['gemma-4-12b-it-qat-q4_0.gguf']),
-    ('ggml-org/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-Q4_K_M.gguf']),
-    ('google/gemma-4-31B-it-qat-q4_0-gguf', ['gemma-4-31B_q4_0-it.gguf']),
+    ('unsloth/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf', 'mtp-gemma-4-E2B-it.gguf']),
+    ('unsloth/gemma-4-E4B-it-GGUF', ['gemma-4-E4B-it-Q4_K_M.gguf', 'mtp-gemma-4-E4B-it.gguf']),
+    ('unsloth/gemma-4-12b-it-GGUF', ['gemma-4-12b-it-Q4_K_M.gguf', 'mtp-gemma-4-12b-it.gguf']),
+    ('unsloth/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-UD-Q4_K_M.gguf', 'mtp-gemma-4-26B-A4B-it.gguf']),
+    ('unsloth/gemma-4-31B-it-qat-GGUF', ['gemma-4-31B-it-qat-UD-Q4_K_XL.gguf', 'mtp-gemma-4-31B-it.gguf']),
     # Qwen runs from the MTP GGUFs (multi-token prediction; non-MTP variants dropped).
     ('unsloth/Qwen3.5-2B-MTP-GGUF',  ['Qwen3.5-2B-Q8_0.gguf']),
     ('unsloth/Qwen3.5-4B-MTP-GGUF',  ['Qwen3.5-4B-Q8_0.gguf']),
     ('unsloth/Qwen3.5-9B-MTP-GGUF',  ['Qwen3.5-9B-Q8_0.gguf']),
     ('unsloth/Qwen3.6-27B-MTP-GGUF', ['Qwen3.6-27B-Q4_K_M.gguf']),
+    ('unsloth/Qwen3.6-35B-A3B-MTP-GGUF', ['Qwen3.6-35B-A3B-UD-Q4_K_M.gguf']),
     # Other families.
     ('mistralai/Ministral-3-8B-Instruct-2512-GGUF',  ['Ministral-3-8B-Instruct-2512-Q8_0.gguf']),
     ('mistralai/Ministral-3-14B-Instruct-2512-GGUF', ['Ministral-3-14B-Instruct-2512-Q4_K_M.gguf']),
@@ -102,6 +110,7 @@ for repo, files in [
     ('unsloth/GLM-4.7-Flash-GGUF', ['GLM-4.7-Flash-Q4_K_M.gguf']),
     ('LiquidAI/LFM2.5-8B-A1B-GGUF', ['LFM2.5-8B-A1B-Q8_0.gguf']),
     ('JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M', ['Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf']),
+    ('ibm-granite/granite-4.1-8b-GGUF', ['granite-4.1-8b-Q8_0.gguf']),
 ]:
     for f in files:
         hf_hub_download(repo, f)
@@ -118,14 +127,17 @@ are cached, so the bench loads via local `-m` paths it discovers under
 # Install project dependencies
 uv sync
 
-# Run full benchmark (n=3 samples per prompt, ~5-6 hours for all 24 configs;
-# the 27B-think and Gemma-31B-think configs dominate the wall time)
+# Run full benchmark (n=3 samples per prompt, ~3.5 hours for all 29 configs;
+# the 27B-think config dominates the wall time -- Gemma is fast now that it uses MTP)
 uv run python benchmark.py
+
+# If port 8080 is taken (e.g. another dev server), run on the next free port:
+uv run python benchmark.py --port 8081
 
 # Run one model's configs (substring match -- e.g. both gemma-4-e2b modes)
 uv run python benchmark.py --model gemma-4-e2b
 
-# Run only the thinking configs (Gemma + Qwen)
+# Run only the thinking configs (Gemma + Qwen + Ornith)
 uv run python benchmark.py --model -think
 
 # Smaller sample size for a quick smoke test
@@ -143,7 +155,8 @@ disown
 ```
 
 After each model the bench writes `results/benchmark.<model>.json` so a crash
-mid-run does not lose prior results.
+mid-run does not lose prior results. A model whose server never comes up (unsupported
+architecture, OOM, bad file) is logged and **skipped** rather than crashing the whole run.
 
 ## Test set (12 text prompts, discriminating core)
 
@@ -190,6 +203,7 @@ Each model uses parameters verified against its official model card; see `MODELS
 | GLM-4.7-Flash | 1.0 | 0.95 | off | - | z.ai card (no top_k published) |
 | LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | card: temp 0.2, top_k 80, rep 1.05 |
 | Mellum2-12B | 0.6 | 0.95 | 20 | - | card quickstart |
+| Granite 4.1-8b | 0.7 | 0.95 | 64 | - | no card preset -- neutral defaults (unverified) |
 
 Notes:
 - **presence_penalty / repetition_penalty** are Qwen's and LFM2.5's documented anti-loop
@@ -233,10 +247,11 @@ Per-model context overrides (memory headroom on the ~25 GB working set):
   KV comfortably within the working set.
 - Everything smaller: default `-c 16384`.
 
-Multi-token prediction (every Qwen `-mtp-*` run): the MTP head is embedded in the
-`-MTP` GGUF, enabled with `--spec-type draft-mtp --spec-draft-n-max 2 -np 1`
-(llama-server build 9380 / d205df681). `-np > 1` is not yet supported with MTP, so MTP
-runs are single-stream.
+Multi-token prediction: every Qwen `-mtp-*` run has its MTP head embedded in the `-MTP`
+GGUF; every Gemma run uses a separate `mtp-*.gguf` draft file that `_start_server`
+auto-attaches via `--model-draft`. Both enable it with `--spec-type draft-mtp
+--spec-draft-n-max 2 -np 1`. It is lossless (verified byte-identical output) and runs
+1.2-2.2x faster. `-np > 1` is not yet supported with MTP, so MTP runs are single-stream.
 
 ## Findings
 
@@ -250,14 +265,15 @@ each run -- not duplicated here):
   9B-think 1/9) but *every* failure is a timeout, never a wrong answer: the model thinks
   too long and never emits the function within the 120s cap. Proof it is speed, not
   thinking: Mellum2 (a native thinking model at ~40 tok/s) scores 9/9 on coding, and MTP
-  rescues every slow Qwen think-config (4B 9/9 with MTP vs 4/9 without). Raising
-  `REQUEST_TIMEOUT` would recover most of it; the 27B stays starved at ~4-5 tok/s.
+  rescues every slow Qwen think-config (4B 9/9 with MTP vs 4/9 without).
+  `REQUEST_TIMEOUT` has since been raised to 300s to recover most of it; the 27B stays
+  starved at ~4-5 tok/s.
 - **MTP is the only Qwen decode mode now.** An earlier A/B kept a non-MTP variant; MTP
   strictly dominated (1.2-1.65x faster, same accuracy, and the speed pulls think-coding
   back under the timeout), so the non-MTP variants were dropped.
 - **The `structured` dimension is at ceiling -- every config scores 6/6.** JSON extraction
-  and strict comma-list output are trivial for all 19 models, so the category adds a flat
-  +6 to everyone without separating anyone. To make it discriminating it needs harder
+  and strict comma-list output are trivial for nearly every model, so the category adds a
+  flat +6 to most without separating them. To make it discriminating it needs harder
   tasks (nested objects, conditional extraction, format traps).
 - **f16 KV cache, not q8_0.** On 32 GB the f16 default fits every model and decodes
   ~1.7x faster than the old q8_0 KV hack (llama-bench, 27B). Quantized K on Metal is costly.
@@ -271,7 +287,7 @@ See `results/COMPARISON.md` for the full table and per-model breakdown.
 **Reading the numbers:**
 
 - **Fails are split `wrong/timeout/empty`.** A timeout means the answer ran past
-  `REQUEST_TIMEOUT` (120s) -- too slow to finish, not a wrong answer. This matters for
+  `REQUEST_TIMEOUT` (currently 300s) -- too slow to finish, not a wrong answer. This matters for
   big think-mode configs: e.g. 27B-think scores low mostly on timeouts (long reasoning
   traces at a few tok/s), which is a speed limit, not a reasoning failure.
 - **Speed vs accuracy are separate concerns.** Absolute `tok/s` from a long full-suite

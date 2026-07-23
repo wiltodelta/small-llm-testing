@@ -27,7 +27,10 @@ RESULTS_DIR = Path(__file__).parent / "results"
 HF_HUB_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
 SERVER_STARTUP_TIMEOUT = 300  # seconds -- 27B models take longer to mmap
-REQUEST_TIMEOUT = 120  # cap per request -- think-mode can run long / loop; fail fast instead of hanging
+REQUEST_TIMEOUT = 300  # cap per request. Was 120: on slow dense models (27B at ~5 tok/s)
+# think-mode coding drowned in timeouts rather than wrong answers -- the root cause was
+# decode speed, not loops (presence_penalty verified, did not help). 300s covers
+# think-mode coding at the slowest decode we benchmark while still failing real hangs.
 DEFAULT_PORT = 8080
 DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperature noise
 PYEXEC_TIMEOUT = 5  # seconds budget per coding test execution
@@ -62,14 +65,19 @@ def _qwen_matrix(
     gguf: str,
     extra_args: tuple[str, ...] = (),
     think_presence_penalty: float = 1.5,
+    nothink_sampling: tuple[float, float, float] = (0.7, 0.8, 1.5),
 ) -> list[ModelConfig]:
     """think + nothink configs for one Qwen, both with MTP speculative decoding.
 
-    Sampling per Qwen team: thinking on -> temp=0.6/top_p=0.95; off -> 0.7/0.8 (top_k=20).
-    presence_penalty per the Qwen cards: 1.5 for non-thinking, and for thinking 1.5 on the
-    small models (3.5 2B/4B/9B) but 0.0 on the 27B (pass `think_presence_penalty=0.0`).
+    Sampling per the official Qwen cards (verified 2026-07 against the cards and
+    generation_config.json): thinking "general" -> temp=1.0/top_p=0.95/top_k=20
+    (0.6/0.95 is the "precise coding" preset, not what this mixed benchmark wants);
+    non-thinking -> 0.7/0.8/top_k=20. presence_penalty: 1.5 everywhere except the 27B's
+    thinking mode (its card uniquely prescribes 0.0; pass `think_presence_penalty=0.0`).
     It is the vendor's documented fix for endless thinking-mode generation -- exactly the
-    looping that drives our think-mode timeouts.
+    looping that drives our think-mode timeouts. `nothink_sampling` (temp, top_p,
+    presence_penalty) overrides the non-thinking preset where a card deviates (the 2B's
+    text preset is 1.0/1.0/2.0; 0.7/0.8/1.5 is only its VL preset).
     All Qwen runs use the -MTP GGUF: in the A/B, MTP strictly dominated plain decode --
     1.2-1.65x faster with the same accuracy, and the extra speed rescues think-mode coding
     from the 120s timeout. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
@@ -77,14 +85,15 @@ def _qwen_matrix(
 
     def make(thinking: bool) -> ModelConfig:
         suffix = "think" if thinking else "nothink"
-        temp, top_p = (0.6, 0.95) if thinking else (0.7, 0.8)
+        temp, top_p = (1.0, 0.95) if thinking else nothink_sampling[:2]
+        presence_penalty = think_presence_penalty if thinking else nothink_sampling[2]
         return ModelConfig(
             name=f"{label}-mtp-{suffix}",
             hf=f"{mtp_repo}:{gguf}",
             temperature=temp,
             top_p=top_p,
             top_k=20,
-            presence_penalty=think_presence_penalty if thinking else 1.5,
+            presence_penalty=presence_penalty,
             thinking=thinking,
             server_args=extra_args + _MTP_ARGS,
         )
@@ -107,23 +116,32 @@ def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[M
 
 
 MODELS: list[ModelConfig] = [
-    # Gemma 4 (Google) -- no MTP head; each runs a think + nothink pair (see _gemma_pair).
-    # temp=1.0, top_p=0.95, top_k=64 (Gemma cards, all use cases). e2b/e4b are Q8_0/Q4_K_M;
-    # 12b/31b are official QAT q4_0; 26b-a4b is a 26B/4B-active MoE. The 31B uses -c 8192 to
-    # keep f16 KV within the working set; the rest fit at default ctx.
-    *_gemma_pair("gemma-4-e2b-Q8_0", "ggml-org/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf"),
-    *_gemma_pair("gemma-4-e4b-Q4_K_M", "ggml-org/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf"),
-    *_gemma_pair("gemma-4-12b-qat-q4_0", "google/gemma-4-12B-it-qat-q4_0-gguf:gemma-4-12b-it-qat-q4_0.gguf"),
-    *_gemma_pair("gemma-4-26b-a4b-Q4_K_M", "ggml-org/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-Q4_K_M.gguf"),
+    # Gemma 4 (Google) -- each runs a think + nothink pair (see _gemma_pair). Loaded from
+    # Unsloth GGUFs because those bundle a separate `mtp-*.gguf` draft head: _start_server
+    # auto-attaches it for lossless ~1.4-2.2x MTP speculative decoding (verified 1.41x on 12B,
+    # byte-identical output). temp=1.0, top_p=0.95, top_k=64 (Gemma cards, all use cases).
+    # Quants follow what Unsloth ships with an MTP draft (e2b Q8_0, e4b Q4_K_M, 12b Q4_K_M,
+    # 26b UD-Q4_K_M, 31b QAT UD-Q4_K_XL); 31B uses -c 8192 to keep f16 KV in the working set.
+    *_gemma_pair("gemma-4-e2b-Q8_0", "unsloth/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf"),
+    *_gemma_pair("gemma-4-e4b-Q4_K_M", "unsloth/gemma-4-E4B-it-GGUF:gemma-4-E4B-it-Q4_K_M.gguf"),
+    *_gemma_pair("gemma-4-12b-Q4_K_M", "unsloth/gemma-4-12b-it-GGUF:gemma-4-12b-it-Q4_K_M.gguf"),
+    *_gemma_pair("gemma-4-26b-a4b-Q4_K_M", "unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"),
     *_gemma_pair(
-        "gemma-4-31b-qat-q4_0",
-        "google/gemma-4-31B-it-qat-q4_0-gguf:gemma-4-31B_q4_0-it.gguf",
+        "gemma-4-31b-qat-Q4_K_XL",
+        "unsloth/gemma-4-31B-it-qat-GGUF:gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
         extra_args=("-c", "8192"),
     ),
     # Qwen: {think, nothink}, both MTP (non-MTP dropped -- MTP strictly dominated the A/B).
     # Qwen3.5 small (Q8_0) fits at default ctx; Qwen 3.6 27B (Q4_K_M ~16.8 GB) uses -c 8192.
     # 0.8B dropped: too small to think productively (loops/timeouts, net loss).
-    *_qwen_matrix("qwen3.5-2b-Q8_0", "unsloth/Qwen3.5-2B-MTP-GGUF", "Qwen3.5-2B-Q8_0.gguf"),
+    # 2B text non-thinking preset per its card: temp=1.0/top_p=1.0/pp=2.0 (0.7/0.8/1.5 is
+    # only its VL preset; the card also warns 2B loops in thinking mode).
+    *_qwen_matrix(
+        "qwen3.5-2b-Q8_0",
+        "unsloth/Qwen3.5-2B-MTP-GGUF",
+        "Qwen3.5-2B-Q8_0.gguf",
+        nothink_sampling=(1.0, 1.0, 2.0),
+    ),
     *_qwen_matrix("qwen3.5-4b-Q8_0", "unsloth/Qwen3.5-4B-MTP-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
     *_qwen_matrix("qwen3.5-9b-Q8_0", "unsloth/Qwen3.5-9B-MTP-GGUF", "Qwen3.5-9B-Q8_0.gguf"),
     *_qwen_matrix(
@@ -132,6 +150,28 @@ MODELS: list[ModelConfig] = [
         "Qwen3.6-27B-Q4_K_M.gguf",
         extra_args=("-c", "8192"),
         think_presence_penalty=0.0,  # 27B card: presence_penalty 0.0 for thinking (vs 1.5 on the small 3.5)
+    ),
+    # Qwen 3.6 35B-A3B MoE (35B total / 3B active) -- the MoE counterpart to the 27B dense.
+    # UD-Q4_K_M ~21 GB at -c 8192 fits the ~25 GB working set (verified by a server-start
+    # smoke; it was previously excluded as too marginal, but loads fine with the smaller ctx).
+    *_qwen_matrix(
+        "qwen3.6-35b-a3b-Q4_K_M",
+        "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        extra_args=("-c", "8192"),
+    ),
+    # Ornith-1.0-35B (DeepReinforce, MIT) -- agentic-coding post-train on Qwen3.5-MoE
+    # (35B total / ~3B active, qwen35moe arch, reasoning model with enable_thinking toggle
+    # in the chat template). MTP GGUF from SEBK4C (MTP head embedded, like the Qwen -MTP
+    # repos); Q4_K_M ~21.7 GB, -c 8192 keeps f16 KV in the working set. The card publishes
+    # temp=0.6/top_p=0.95/top_k=20 for its examples but no presence_penalty guidance; we
+    # keep the Qwen-family defaults (think 1.0/0.95, pp=1.5) for comparability with the
+    # Qwen3.6-35B-A3B it competes with.
+    *_qwen_matrix(
+        "ornith-1.0-35b-Q4_K_M",
+        "SEBK4C/Ornith-1.0-35B-MTP-GGUF",
+        "ornith-1.0-35b-Q4_K_M-MTP.gguf",
+        extra_args=("-c", "8192"),
     ),
     # Other families -- single instruct config each, no MTP head. Sampling from each model
     # card; values verified against the official cards (see per-model notes).
@@ -197,8 +237,19 @@ MODELS: list[ModelConfig] = [
         top_p=0.95,
         top_k=20,
     ),
-    # Qwen 3.6 35B-A3B MoE (UD-Q4_K_M ~22.1 GB) excluded: too marginal on the ~25 GB
-    # working set (88% of it, even tighter with f16 KV). See README "Memory class reference".
+    # IBM Granite 4.1-8b (Apache-2.0) -- new IBM family, ~8B. Q8_0 ~9 GB. `granite` arch,
+    # loads on llama.cpp 9590 (verified by a server-start smoke). Card publishes no sampling
+    # preset; neutral defaults (temp 0.7 / top_p 0.95 / top_k 64), unverified -- tune later.
+    ModelConfig(
+        name="granite-4.1-8b-Q8_0",
+        hf="ibm-granite/granite-4.1-8b-GGUF:granite-4.1-8b-Q8_0.gguf",
+        temperature=0.7,
+        top_p=0.95,
+        top_k=64,
+    ),
+    # OLMo 3.1 32B Instruct considered but dropped: its Jinja chat template uses a `tojson`
+    # filter llama.cpp 9590 cannot parse ("Unknown filter 'tojson'"); would need --no-jinja
+    # with a hand-picked template, too risky to guess for an accuracy benchmark.
 ]
 
 
@@ -721,6 +772,14 @@ def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
         *DEFAULT_SERVER_ARGS,
         *model.server_args,
     ]
+    # Gemma 4 ships its MTP head as a SEPARATE `mtp-*.gguf` draft file in the snapshot;
+    # auto-attach it as a draft model for lossless ~1.4-2.2x speculative decoding. Qwen's
+    # MTP head is embedded in the main GGUF and already carries --spec-type in server_args,
+    # so skip the draft path there to avoid double-configuring.
+    if "--spec-type" not in model.server_args:
+        draft = next(iter(model_path.parent.glob("mtp-*.gguf")), None)
+        if draft is not None:
+            cmd += ["--model-draft", str(draft), "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "-np", "1"]
     log.info("Starting server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _wait_for_server(port)
@@ -843,7 +902,13 @@ def run_benchmark(
             log.warning("Skipping %s -- not downloaded. See README for download instructions.", model.name)
             continue
         log.info("=== Model: %s ===", model.name)
-        proc = _start_server(model, port)
+        try:
+            proc = _start_server(model, port)
+        except (TimeoutError, OSError) as e:
+            # A model whose server never comes up (unsupported arch, OOM, bad file) must not
+            # crash the whole unattended run -- skip it and move on.
+            log.warning("Skipping %s -- server failed to start: %s", model.name, e)
+            continue
         try:
             mr = ModelResult(model_name=model.name, hf_id=model.hf)
             for prompt in PROMPTS:
