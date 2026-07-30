@@ -24,6 +24,12 @@
 - Laguna-XS-2.1 was measured and dropped: arch works (llama.cpp >= 10090, PR #25165) but
   the Metal f16 overflow in its MoE down-projection returns empty output for most prompts
   (21/36 empty think, 6/36 nothink on 2026-07-23). Re-add when upstream PR #25442 lands.
+- OLMo 3.1 32B Instruct requires `--jinja`: its template failed with `Unknown filter
+  'tojson'` on llama.cpp 9590, but build 10090 loads the original template and returns
+  valid chat completions. It uses `-c 8192` for memory headroom.
+- Bonsai 27B's Q1_0/Q2_0 hybrid-attention quants require the PrismML llama.cpp fork.
+  Keep them outside the main table so every comparable result uses the same upstream
+  Homebrew runtime.
 - `DEFAULT_SERVER_ARGS` in `benchmark.py` applies to every server start:
   `-ngl 99 -fa on -ub 1024 -c 16384`. KV cache stays at the f16 default (NOT q8_0):
   on 32 GB everything fits, and f16 KV is ~1.7x faster decode than q8_0 on this M5

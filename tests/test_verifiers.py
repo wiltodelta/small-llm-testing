@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import pytest
 
+import benchmark
 from benchmark import (
+    MODELS,
+    PROMPTS,
+    _run_one_attempt,
     _strip_think,
     fail_kind,
     v_json,
@@ -17,6 +21,20 @@ from benchmark import (
     v_regex,
     v_yes_no,
 )
+
+
+def test_api_error_records_elapsed_wall_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        raise TimeoutError
+
+    times = iter((100.0, 107.25))
+    monkeypatch.setattr(benchmark, "_chat", raise_timeout)
+    monkeypatch.setattr(benchmark.time, "monotonic", lambda: next(times))
+
+    attempt = _run_one_attempt(PROMPTS[0], MODELS[0], port=8080)
+
+    assert attempt.time_s == 7.25
+    assert attempt.fail_reason == "api error: TimeoutError"
 
 
 class TestStripThink:

@@ -11,9 +11,9 @@ a one-line Swift Metal query (do not guess it):
 - Qwen 3.6 35B-A3B UD-Q4_K_M (~21 GB) now INCLUDED: at `-c 8192` it loads fine
   (verified by a server-start smoke). Previously excluded as too marginal; the smaller
   ctx leaves enough headroom. Its MoE (3B active) beats the 27B dense on accuracy AND speed.
-- OLMo 3.1 32B Instruct -- excluded: chat-template `tojson` filter unparseable by
-  llama.cpp (observed on build 9590, not retested since; would need `--no-jinja` + a
-  guessed template). Memory was fine (~19.5 GB).
+- OLMo 3.1 32B Instruct Q4_K_M (~19.5 GB) is included at `-c 8192`. The original
+  Jinja template and a chat completion were smoke-tested successfully on llama.cpp
+  build 10090; the `tojson` parser failure from build 9590 no longer reproduces.
 - Phi-4-Reasoning 15B -- excluded for speed (7.9 tok/s), not memory.
 - Zyphra ZAYA1-8B -- excluded: hybrid-Mamba MoE, no working llama.cpp path
   (official deploy is a custom vLLM fork), text-only.

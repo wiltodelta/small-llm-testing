@@ -23,6 +23,9 @@ Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.c
 | [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | 12B total / 2.5B active (MoE, coding) | Q4_K_M (~8.1 GB) | 2026 | JetBrains (Apache-2.0) |
 | [Granite 4.1-8b](https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF) | ~8B | Q8_0 (~9 GB) | 2026 | IBM (Apache-2.0) |
 | [Ornith-1.0-35B](https://huggingface.co/SEBK4C/Ornith-1.0-35B-MTP-GGUF) | 35B total / ~3B active (MoE, coding) | Q4_K_M + MTP (~21.7 GB) | 2026 | DeepReinforce (MIT) |
+| [Ornith-1.0-9B](https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF) | 9B dense (agentic coding) | Q8_0 (~9.8 GB) | June 2026 | DeepReinforce (MIT) |
+| [Agents-A1-4B](https://huggingface.co/InternScience/Agents-A1-4B-Q8_0-GGUF) | 4B dense (agentic) | Q8_0 (~4.3 GB) | July 2026 | InternScience (Apache-2.0) |
+| [OLMo 3.1 32B Instruct](https://huggingface.co/unsloth/Olmo-3.1-32B-Instruct-GGUF) | 32B dense | Q4_K_M (~19.5 GB) | 2026 | Allen AI (Apache-2.0) |
 
 Qwen 3.5 covers the small tier (Qwen 3.6 ships large-only: 27B and 35B-A3B), so the
 two generations do not overlap in size. Qwen3.5-0.8B is dropped -- too small to think
@@ -33,7 +36,7 @@ Each Qwen model runs **2 configs: `-mtp-think` and `-mtp-nothink`** -- thinking 
 [MTP GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) with multi-token prediction
 (`--spec-type draft-mtp`). An earlier A/B kept a non-MTP variant of each; it was dropped
 because MTP strictly dominated -- 1.2-1.65x faster decode at the same accuracy, and the
-extra speed pulls think-mode coding back under the 120s request timeout. MTP heads ship for
+extra speed pulls most think-mode coding back under the request timeout. MTP heads ship for
 the whole Qwen 3.5 / 3.6 line.
 
 Gemma 4 (unlike Gemma 3) has an `enable_thinking` toggle, so each Gemma runs a
@@ -42,11 +45,12 @@ worth +3..+9 for Gemma (math_modular/multistep, reasoning) on every size except 
 (ceiling either way), at higher wall time but no timeouts. Gemma is loaded from **Unsloth
 GGUFs, which ship a separate `mtp-*.gguf` MTP draft head** that the harness auto-attaches
 for lossless multi-token-prediction speculative decoding (measured 1.2-2.1x faster, e.g.
-e2b-think 34 -> 73 tok/s, byte-identical output). Ornith also runs a think + nothink pair
-(it honors `enable_thinking`). The other families (Ministral 3,
-GLM-4.7-Flash, LFM2.5, Mellum2, Granite 4.1) run one config each with no MTP;
-GLM and LFM2.5/Mellum reason by default, Ministral/Granite are plain instruct. The
-suite is text-only (see Test set below).
+e2b-think 34 -> 73 tok/s, byte-identical output). Ornith 35B also runs a think + nothink
+pair (it honors `enable_thinking`). Ornith 9B and Agents-A1 are native reasoning models
+with no documented direct-mode toggle, so each runs once. The other families
+(Ministral 3, GLM-4.7-Flash, LFM2.5, Mellum2, Granite 4.1, OLMo 3.1 Instruct) run one
+config each with no MTP. GLM, LFM2.5, and Mellum reason by default; Ministral, Granite,
+and OLMo are plain instruct. The suite is text-only (see Test set below).
 
 ### Memory class reference
 
@@ -56,8 +60,8 @@ and the ~17 GB Gemma 31B / 26B-A4B and Qwen 27B -- all fit. Excluded:
 
 | Model | Status |
 |-------|--------|
-| OLMo 3.1 32B Instruct | Excluded -- its Jinja chat template uses a `tojson` filter llama.cpp could not parse (`Unknown filter 'tojson'`, observed on build 9590, not retested since); would need `--no-jinja` with a hand-picked template, too risky to guess. |
 | Laguna-XS-2.1 33B | Excluded after measurement -- arch support works (llama.cpp >= 10090, PR #25165), but the Metal f16 overflow in its MoE down-projection makes it return EMPTY output for most prompts (2026-07-23 run: 21/36 empty think, 6/36 nothink). Fix is upstream PR #25442; re-add when it lands. |
+| Bonsai 27B 1-bit / ternary | Excluded from the comparable suite -- its Q1_0/Q2_0 hybrid-attention kernels require the PrismML llama.cpp fork. The upstream Homebrew runtime used by every other result cannot load those custom quants. |
 | Phi-4-Reasoning 15B | Excluded -- too slow (7.9 tok/s, most prompts timeout). Not a memory limit. |
 | Phi-4-mini | Excluded 2026-07 -- released 2025-02, a generation older than the rest; weakest vendor GPQA of the set (25.2); greedy temp=0 makes n=3 sampling degenerate. Comparison no longer informative. |
 | Zyphra ZAYA1-8B | Excluded -- hybrid-Mamba MoE, no working llama.cpp path (official deploy is a custom vLLM fork); text-only. |
@@ -113,6 +117,9 @@ for repo, files in [
     ('LiquidAI/LFM2.5-8B-A1B-GGUF', ['LFM2.5-8B-A1B-Q8_0.gguf']),
     ('JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M', ['Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf']),
     ('ibm-granite/granite-4.1-8b-GGUF', ['granite-4.1-8b-Q8_0.gguf']),
+    ('deepreinforce-ai/Ornith-1.0-9B-GGUF', ['ornith-1.0-9b-Q8_0.gguf']),
+    ('InternScience/Agents-A1-4B-Q8_0-GGUF', ['Agents-A1-4B-Q8_0.gguf']),
+    ('unsloth/Olmo-3.1-32B-Instruct-GGUF', ['Olmo-3.1-32B-Instruct-Q4_K_M.gguf']),
 ]:
     for f in files:
         hf_hub_download(repo, f)
@@ -129,8 +136,7 @@ are cached, so the bench loads via local `-m` paths it discovers under
 # Install project dependencies
 uv sync
 
-# Run full benchmark (n=3 samples per prompt, ~3.5 hours for all 29 configs;
-# the 27B-think config dominates the wall time -- Gemma is fast now that it uses MTP)
+# Run full benchmark (n=3 samples per prompt; expect a multi-hour run)
 uv run python benchmark.py
 
 # If port 8080 is taken (e.g. another dev server), run on the next free port:
@@ -201,19 +207,21 @@ Each model uses parameters verified against its official model card; see `MODELS
 | Qwen thinking | 1.0 | 0.95 | 20 | presence 1.5 (0.0 on 27B) | [Qwen cards](https://qwenlm.github.io/blog/qwen3/) ("general" preset; 0.6/0.95 is the "precise coding" preset) |
 | Qwen no-think | 0.7 | 0.8 | 20 | presence 1.5 | same (2B text: 1.0 / 1.0 / 20, presence 2.0) |
 | Ornith-1.0-35B | think 1.0 / nothink 0.7 | 0.95 / 0.8 | 20 | presence 1.5 | Qwen-family defaults (card: 0.6/0.95/20 examples, no penalty guidance) |
+| Ornith-1.0-9B | 0.6 | 0.95 | 20 | - | official card quickstart |
+| Agents-A1-4B | 0.85 | 0.95 | 20 | presence 1.1 | official card |
 | Ministral 3 8B/14B | 0.07 | 1.0 | off | - | card: "temperature below 0.1" |
 | GLM-4.7-Flash | 1.0 | 0.95 | off | - | z.ai card (no top_k published) |
 | LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | card: temp 0.2, top_k 80, rep 1.05 |
 | Mellum2-12B | 0.6 | 0.95 | 20 | - | card quickstart |
 | Granite 4.1-8b | 0.7 | 0.95 | 64 | - | no card preset -- neutral defaults (unverified) |
+| OLMo 3.1 32B Instruct | 0.6 | 0.95 | off | - | official `generation_config.json` |
 
 Notes:
 - **presence_penalty / repetition_penalty** are Qwen's and LFM2.5's documented anti-loop
   knobs (Qwen up to 2.0; LFM2.5 1.05; `repetition_penalty` is sent as llama.cpp
-  `repeat_penalty`). They were hypothesized to cut the think-mode timeouts, but a controlled
-  re-run showed almost no effect (27B-think 12 -> 11 timeouts, small Qwen unchanged): the
-  timeouts are bound by decode speed, not looping. The knobs stay because they are
-  vendor-recommended, not because they fixed the artifact -- raise `REQUEST_TIMEOUT` for that.
+  `repeat_penalty`). They were hypothesized to cut think-mode timeouts, but a controlled
+  rerun showed negligible effect: the timeouts are bound by decode speed, not looping.
+  The knobs stay because they are vendor-recommended, not because they fixed the artifact.
 - **Gemma 4 has a thinking toggle** (`enable_thinking`, unlike Gemma 3), so it runs a
   think/nothink pair like Qwen; thinking is worth +3..+9 for it (at 10-25x time, no timeouts).
   `enable_thinking` is sent on every request; toggle-less models ignore it. GLM's hybrid
@@ -243,8 +251,8 @@ especially costly. `q8_0` KV was a 16 GB-machine memory hack and is no longer us
 
 Per-model context overrides (memory headroom on the ~25 GB working set):
 
-- The ~18 GB models (Qwen 3.6 27B, GLM-4.7-Flash, Gemma 4 31B): `-c 8192` to keep f16
-  KV comfortably within the working set.
+- The ~18-20 GB models (Qwen 3.6 27B, GLM-4.7-Flash, Gemma 4 31B, OLMo 3.1 32B):
+  `-c 8192` to keep f16 KV comfortably within the working set.
 - Everything smaller: default `-c 16384`.
 
 Multi-token prediction: every Qwen `-mtp-*` run has its MTP head embedded in the `-MTP`
@@ -255,19 +263,20 @@ auto-attaches via `--model-draft`. Both enable it with `--spec-type draft-mtp
 
 ## Findings
 
-Qualitative conclusions (current numbers live in `results/COMPARISON.md`, regenerated
-each run -- not duplicated here):
+Key dated verdicts are recorded here because `results/` is local and gitignored. Full
+current numbers live in `results/COMPARISON.md`, regenerated after each run:
 
-- **Best small-footprint model: Gemma 4 26B-A4B.** Top accuracy on the core set at a
-  fraction of dense-27B cost (MoE, ~4B active) and fits the 32 GB working set.
-- **Thinking helps math/reasoning but collapses on coding -- via timeouts, not bad code.**
-  `-think` beats `-nothink` on math and reasoning. On coding it craters (27B-think 0/9,
-  9B-think 1/9) but *every* failure is a timeout, never a wrong answer: the model thinks
-  too long and never emits the function within the 120s cap. Proof it is speed, not
-  thinking: Mellum2 (a native thinking model at ~40 tok/s) scores 9/9 on coding, and MTP
-  rescues every slow Qwen think-config (4B 9/9 with MTP vs 4/9 without).
-  `REQUEST_TIMEOUT` has since been raised to 300s to recover most of it; the 27B stays
-  starved at ~4-5 tok/s.
+- **Current speed/accuracy leader: Mellum2-12B-A2.5B.** The 2026-07-29 full run gave it
+  36/36 in 156 seconds. Small Gemma thinking configs also reached the accuracy ceiling,
+  while Gemma 26B-A4B no-think was the fastest near-perfect direct configuration.
+- **Thinking is valuable only when the model can finish.** It consistently repairs
+  math/reasoning failures in small Gemma and Qwen configs. The dense Qwen 27B instead
+  repeatedly hit the request cap on coding, so its thinking and direct modes tied on
+  total accuracy while thinking took far longer. Those failures are timeouts, not
+  verifier-rejected code.
+- **The new native reasoning models are accurate but slow.** Ornith 9B and Agents-A1 4B
+  both reached the ceiling in the dated run but were much slower. GLM also reached the
+  ceiling and was faster, while Mellum2 retained a large latency advantage.
 - **MTP is the only Qwen decode mode now.** An earlier A/B kept a non-MTP variant; MTP
   strictly dominated (1.2-1.65x faster, same accuracy, and the speed pulls think-coding
   back under the timeout), so the non-MTP variants were dropped.

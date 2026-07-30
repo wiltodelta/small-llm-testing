@@ -54,7 +54,7 @@ def main() -> None:
         "",
         "Caveats: (1) fails split `wrong/timeout/empty` -- a timeout is too-slow-to-finish,",
         "not a wrong answer. (2) `tok/s` from this long suite is thermally throttled toward",
-        "the end (27B ran last); use `llama-bench` on a cool machine for peak decode speed.",
+        "the end; use `llama-bench` on a cool machine for peak decode speed.",
         "",
         "## All configs",
         "",

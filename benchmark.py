@@ -80,7 +80,7 @@ def _qwen_matrix(
     text preset is 1.0/1.0/2.0; 0.7/0.8/1.5 is only its VL preset).
     All Qwen runs use the -MTP GGUF: in the A/B, MTP strictly dominated plain decode --
     1.2-1.65x faster with the same accuracy, and the extra speed rescues think-mode coding
-    from the 120s timeout. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
+    from the request timeout. `extra_args` (e.g. ("-c", "8192") for the 27B) applies to both.
     """
 
     def make(thinking: bool) -> ModelConfig:
@@ -173,6 +173,30 @@ MODELS: list[ModelConfig] = [
         "ornith-1.0-35b-Q4_K_M-MTP.gguf",
         extra_args=("-c", "8192"),
     ),
+    # Ornith-1.0-9B (DeepReinforce, MIT) -- dense agentic-coding model post-trained
+    # from Qwen3.5-9B. It is a native reasoning model with no documented thinking
+    # toggle, so it runs one config and emits <think> blocks by default. The official
+    # card recommends temp=0.6/top_p=0.95/top_k=20. Q8_0 keeps it directly comparable
+    # with the Qwen3.5-9B base in this suite.
+    ModelConfig(
+        name="ornith-1.0-9b-think-Q8_0",
+        hf="deepreinforce-ai/Ornith-1.0-9B-GGUF:ornith-1.0-9b-Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+    ),
+    # Agents-A1-4B (InternScience, Apache-2.0) -- dense Qwen3.5-based agentic model,
+    # released 2026-07-14. Its card recommends temp=0.85/top_p=0.95/top_k=20,
+    # presence_penalty=1.1. The model reasons by default; no direct-mode toggle is
+    # documented, so it runs one config.
+    ModelConfig(
+        name="agents-a1-4b-think-Q8_0",
+        hf="InternScience/Agents-A1-4B-Q8_0-GGUF:Agents-A1-4B-Q8_0.gguf",
+        temperature=0.85,
+        top_p=0.95,
+        top_k=20,
+        presence_penalty=1.1,
+    ),
     # poolside Laguna-XS-2.1 measured and dropped: arch support works (PR #25165, llama.cpp
     # >= 10090), but on Apple Metal the MoE down-projection f16 overflow makes the model
     # return EMPTY output for most prompts (measured 2026-07-23: 21/36 empty in think mode,
@@ -244,9 +268,20 @@ MODELS: list[ModelConfig] = [
         top_p=0.95,
         top_k=64,
     ),
-    # OLMo 3.1 32B Instruct considered but dropped: its Jinja chat template uses a `tojson`
-    # filter llama.cpp 9590 cannot parse ("Unknown filter 'tojson'"); would need --no-jinja
-    # with a hand-picked template, too risky to guess for an accuracy benchmark.
+    # OLMo 3.1 32B Instruct (Allen AI, Apache-2.0) -- dense instruct model. Its Jinja
+    # template failed on llama.cpp 9590 because the runtime lacked the `tojson` filter;
+    # build 10090 loads the original template with --jinja and returns valid chat
+    # completions. Q4_K_M is ~19.5 GB, so -c 8192 keeps f16 KV within the working set.
+    # generation_config.json prescribes temp=0.6/top_p=0.95 and no top_k.
+    ModelConfig(
+        name="olmo-3.1-32b-instruct-Q4_K_M",
+        hf="unsloth/Olmo-3.1-32B-Instruct-GGUF:Olmo-3.1-32B-Instruct-Q4_K_M.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=0,
+        thinking=False,
+        server_args=("--jinja", "-c", "8192"),
+    ),
 ]
 
 
@@ -798,10 +833,8 @@ def _stop_server(proc: subprocess.Popen[bytes]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _chat(
-    messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, *, thinking: bool
-) -> tuple[str, int, float]:
-    """Send a chat completion request. Returns (response_text, token_count, elapsed_s).
+def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, *, thinking: bool) -> tuple[str, int]:
+    """Send a chat completion request. Returns (response_text, token_count).
 
     `thinking` is the effective per-request decision (see `_thinks` for the per-category
     gate), not necessarily `model_cfg.thinking`.
@@ -834,14 +867,12 @@ def _chat(
         headers={"Content-Type": "application/json"},
     )
 
-    start = time.monotonic()
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         body = json.loads(resp.read().decode())
-    elapsed = time.monotonic() - start
 
     text: str = body["choices"][0]["message"]["content"]
     tokens: int = body["usage"]["completion_tokens"]
-    return text, tokens, elapsed
+    return text, tokens
 
 
 # ---------------------------------------------------------------------------
@@ -863,11 +894,20 @@ def _thinks(model_cfg: ModelConfig, prompt: Prompt) -> bool:
 
 
 def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attempt:
+    start = time.monotonic()
     try:
-        text, tokens, elapsed = _chat(prompt.messages, model_cfg, port, thinking=_thinks(model_cfg, prompt))
+        text, tokens = _chat(prompt.messages, model_cfg, port, thinking=_thinks(model_cfg, prompt))
     except Exception as e:
+        elapsed = time.monotonic() - start
         log.warning("    api error on %s/%s: %s", model_cfg.name, prompt.name, e)
-        return Attempt(tokens=0, time_s=0.0, response="", ok=False, fail_reason=f"api error: {type(e).__name__}")
+        return Attempt(
+            tokens=0,
+            time_s=round(elapsed, 2),
+            response="",
+            ok=False,
+            fail_reason=f"api error: {type(e).__name__}",
+        )
+    elapsed = time.monotonic() - start
     ok, reason = prompt.verify(text)
     return Attempt(tokens=tokens, time_s=round(elapsed, 2), response=text, ok=ok, fail_reason=reason)
 

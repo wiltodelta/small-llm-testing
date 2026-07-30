@@ -32,6 +32,8 @@ gate is meaningful: `-think` configs run the structured prompts direct.
 
 **Fail classification:** `fail_kind` splits failures into `wrong` / `timeout` /
 `empty` so the summary table never conflates "too slow to finish" with "wrong answer".
+Failed API attempts retain their measured wall time; a request timeout therefore
+contributes the full timeout duration to prompt and model totals.
 Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
 cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
 
