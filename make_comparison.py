@@ -25,7 +25,7 @@ def _fail_counts(model: ModelDict) -> tuple[int, int, int]:
 
 
 def _think_pairs(models: dict[str, ModelDict]) -> list[str]:
-    """Base labels that have BOTH a `-think` and a `-nothink` config (Gemma and Qwen).
+    """Base labels that have both a `-think` and a `-nothink` config.
 
     The base is the name minus the trailing `-think` (e.g. `gemma-4-e2b-Q8_0` or
     `qwen3.5-2b-Q8_0-mtp`).
@@ -70,7 +70,7 @@ def main() -> None:
 
     lines += [
         "",
-        "## Thinking vs no-thinking (Gemma 4 and Qwen; Qwen are MTP)",
+        "## Thinking vs no-thinking",
         "",
         "| Config | think | nothink | think fails w/t/e |",
         "|---|---|---|---|",

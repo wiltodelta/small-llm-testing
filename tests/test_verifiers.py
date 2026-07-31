@@ -6,6 +6,8 @@ all results. These tests pin their behavior with no llama-server dependency.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 import benchmark
@@ -22,6 +24,21 @@ from benchmark import (
     v_yes_no,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def test_default_model_set_is_curated() -> None:
+    # Literal names intentionally pin the routine core; do not derive this set from MODELS.
+    assert {model.name for model in MODELS} == {
+        "gemma-4-e2b-Q8_0-think",
+        "gemma-4-e2b-Q8_0-nothink",
+        "gemma-4-26b-a4b-Q4_K_M-think",
+        "gemma-4-26b-a4b-Q4_K_M-nothink",
+        "lfm2.5-8b-a1b-Q8_0",
+        "mellum2-12b-a2.5b-think-Q4_K_M",
+    }
+
 
 def test_api_error_records_elapsed_wall_time(monkeypatch: pytest.MonkeyPatch) -> None:
     def raise_timeout(*args: object, **kwargs: object) -> None:
@@ -35,6 +52,19 @@ def test_api_error_records_elapsed_wall_time(monkeypatch: pytest.MonkeyPatch) ->
 
     assert attempt.time_s == 7.25
     assert attempt.fail_reason == "api error: TimeoutError"
+
+
+def test_save_json_creates_nested_results_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    results_dir = tmp_path / "challengers" / "north"
+    monkeypatch.setattr(benchmark, "RESULTS_DIR", results_dir)
+
+    path = benchmark._save_json([])
+
+    assert path == results_dir / "benchmark.json"
+    assert path.exists()
 
 
 class TestStripThink:

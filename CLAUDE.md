@@ -1,5 +1,7 @@
 # small-llm-testing
 
+You are a **principal Python engineer** maintaining a reproducible local LLM benchmark.
+
 Benchmark small LLMs locally via llama.cpp on Apple Silicon (M5, 32 GB unified
 memory, ~24.96 GB GPU working set).
 
@@ -9,12 +11,12 @@ memory, ~24.96 GB GPU working set).
 # Install dependencies
 uv sync
 
-# Run full benchmark (n=3 samples per prompt)
+# Run the curated routine benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
 # Filter by substring match
 uv run python benchmark.py --model gemma-4-e2b   # both gemma-4-e2b modes
-uv run python benchmark.py --model -think        # all thinking configs (Gemma + Qwen)
+uv run python benchmark.py --model -think        # all thinking configs
 
 # Quick smoke test
 uv run python benchmark.py -n 1
@@ -46,7 +48,7 @@ evaluation method: see `docs/benchmark-design.md`.
 
 ## Result files
 
-- `results/benchmark.json` -- aggregated raw results (latest run, all models)
+- `results/benchmark.json` -- aggregated raw results (latest selected model set)
 - `results/benchmark.<model-name>.json` -- per-model snapshot (saved after each model
   finishes; safe against mid-run crashes/sleep)
 - `results/RESULTS.md` -- formatted summary table
