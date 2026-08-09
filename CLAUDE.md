@@ -2,8 +2,8 @@
 
 You are a **principal Python engineer** maintaining a reproducible local LLM benchmark.
 
-Benchmark small LLMs locally via llama.cpp on Apple Silicon (M5, 32 GB unified
-memory, ~24.96 GB GPU working set).
+Benchmark small LLMs locally via llama.cpp on Apple Silicon (M5). Working-set
+ceiling and per-model footprints: `docs/hardware-notes.md`.
 
 ## How to run
 
@@ -27,7 +27,7 @@ so a closed lid doesn't kill them.
 
 ## Scripts
 
-- `maintain.sh` -- uv sync + uv-outdated + uv-secure + ruff check/fix + format + pyright + pytest.
+- `maintain.sh` -- the canonical Python gate, run after `uv sync`.
 - `benchmark.py` -- starts llama-server per model, runs 12 prompts x N samples,
   saves per-model and aggregated results (`benchmark.json` + `RESULTS.md`)
 - `make_comparison.py` -- regenerates `results/COMPARISON.md` and the README quick-choice
@@ -56,7 +56,3 @@ evaluation method: see `docs/benchmark-design.md`.
 
 llama-server start failures, the Mellum2 PR requirement, port-8080 staleness, and the
 jetsam OOM hazard: see `docs/troubleshooting.md`.
-
-## Memory class
-
-Measured model footprints and the working-set ceiling (M5): see `docs/hardware-notes.md`.
