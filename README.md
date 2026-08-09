@@ -25,7 +25,9 @@ Measured 2026-08-09 on Apple M5, 32 GB, with f16 KV.
 See the [full comparison](results/COMPARISON.md) for every measured configuration and
 the [raw benchmark data](results/benchmark.json) for reproducibility. Long sequential
 runs thermally throttle this Mac, so suite `tok/s` is best for relative comparison;
-measure peak decode speed with `llama-bench` on a cool machine.
+measure peak decode speed with `llama-bench` on a cool machine. The 2026-08-09 run
+overlapped other workloads, especially for the final challengers, so its speed results
+are conservative; mechanical accuracy scores are unaffected.
 
 ## Default routine set
 
