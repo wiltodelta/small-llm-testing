@@ -10,16 +10,16 @@ generation on long responses; suite time also captures how much reasoning each m
 emits, so use both when choosing an interactive model.
 
 <!-- BEGIN GENERATED QUICK CHOICE -->
-Measured 2026-07-30 on Apple M5, 32 GB, with f16 KV.
+Measured 2026-08-09 on Apple M5, 32 GB, with f16 KV.
 
 | Model | Quant | Mode | Score | Suite time | tok/s | Choose it for |
 |---|---|---|---:|---:|---:|---|
-| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 36/36 | 166s | 66.7 | Compact reasoning |
-| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | direct | 25/36 | 35s | 71.2 | Maximum compact-model throughput |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | think | 36/36 | 303s | 33.5 | Fast MoE reasoning |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 35/36 | 28s | 34.5 | Low-latency near-perfect answers |
-| [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Q8_0 | native | 35/36 | 192s | 30.2 | Small active-parameter MoE |
-| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 36/36 | 156s | 31.3 | Single-config coding and reasoning |
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 36/36 | 317s | 38.2 | Compact reasoning |
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | direct | 26/36 | 62s | 38.8 | Maximum compact-model throughput |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | think | 36/36 | 658s | 15.9 | Fast MoE reasoning |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 34/36 | 53s | 16.7 | Low-latency near-perfect answers |
+| [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Q8_0 | native | 35/36 | 227s | 24.7 | Small active-parameter MoE |
+| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 36/36 | 163s | 30.7 | Single-config coding and reasoning |
 <!-- END GENERATED QUICK CHOICE -->
 
 See the [full comparison](results/COMPARISON.md) for every measured configuration and
@@ -41,8 +41,8 @@ families are no longer part of every routine run:
 
 | Status | Models | Reason |
 |--------|--------|--------|
-| Separate agentic track | North Mini Code, Ornith 9B, Agents-A1 4B | Accurate on the text core, but slow or specifically agent-trained; evaluate with tool-use and repository tasks instead |
-| Historical controls | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 35B | Duplicated a stronger speed/accuracy point or added too much routine latency |
+| Separate agentic track | North Mini Code, Ornith 9B, Agents-A1 4B, Nanbeige4.2-3B, Fara1.5-4B | Agent-trained or multimodal models need tool-use, repository, or browser tasks rather than text score alone |
+| Historical controls | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 35B; LFM2.5-2.6B | Duplicated a stronger speed/accuracy point or added too much routine latency |
 | Recheck only after runtime fixes | Laguna-XS-2.1 | Metal overflow produced mostly empty output; upstream fix required |
 | Runtime-incompatible | Bonsai 27B, ZAYA1-8B | Require a custom runtime rather than the common upstream llama.cpp build |
 | Too slow or obsolete | Phi-4-Reasoning 15B, Phi-4-mini | Poor local latency or no longer a useful generation comparison |
@@ -53,11 +53,14 @@ does not measure.
 
 ### Latest model search
 
-The 2026-07-30 search checked recent official releases against the machine's working-set
-limit before downloading:
+The latest search checked recent official releases against the machine's working-set
+limit, upstream llama.cpp support, and the vendor's recommended inference settings:
 
 | Model | Decision |
 |-------|----------|
+| [LFM2.5-2.6B](https://huggingface.co/LiquidAI/LFM2.5-2.6B) | Accurate but too verbose and slow to add a routine Pareto point. Keep as a historical challenger; see the [generated comparison](results/COMPARISON.md) and [verified preset](docs/configuration.md#lfm25-26b). |
+| [Nanbeige4.2-3B](https://huggingface.co/Nanbeige/Nanbeige4.2-3B) | Thinking is accurate but impractically slow; direct mode loses too much accuracy. Move to the agentic track; see the [generated comparison](results/COMPARISON.md) and [verified presets](docs/configuration.md#nanbeige42-3b). |
+| [Fara1.5-4B](https://huggingface.co/microsoft/Fara1.5-4B) | Upstream llama.cpp passed a safe synthetic browser smoke, but this is not an end-to-end reliability result. Evaluate through the official agent harness; see the [runtime and preset record](docs/configuration.md#fara15-4b). |
 | [North Mini Code 1.0](https://huggingface.co/blog/CohereLabs/introducing-north-mini-code) | Measured locally. The 30B-A3B MoE loaded with upstream llama.cpp from the 19.2 GB `UD-Q4_K_M` GGUF and passed 36/36 in 328 seconds. It is accurate but does not beat Mellum2 on this text core, so it moves to the agentic track where its tool-use training can be measured. |
 | [Laguna S 2.1](https://huggingface.co/poolside/Laguna-S-2.1) | Do not download on this machine. The official 118B-A8B model's smallest published upstream GGUF is 96 GB, far beyond the working set. |
 | [MiMo V2.5](https://huggingface.co/XiaomiMiMo/MiMo-V2.5) | Exclude from local runs. The official model is 310B-A15B and its deployment guidance targets multi-GPU vLLM or SGLang rather than this memory class. |
@@ -176,8 +179,12 @@ Each model uses parameters verified against its official model card; see `MODELS
 | Model | Temperature | top_p | top_k | presence / repetition penalty | Source |
 |---|---|---|---|---|---|
 | Gemma 4 | 1.0 | 0.95 | 64 | - | [Gemma cards](https://ai.google.dev/gemma/docs/core) |
-| LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | card: temp 0.2, top_k 80, rep 1.05 |
-| Mellum2-12B | 0.6 | 0.95 | 20 | - | card quickstart |
+| LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | [official model card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
+| Mellum2-12B | 0.6 | 0.95 | 20 | - | [official model card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
+
+The exact researched presets for LFM2.5-2.6B, Nanbeige4.2-3B, and Fara1.5-4B,
+including context, output, thinking, tool-template, and scenario controls, are recorded
+in [configuration notes](docs/configuration.md#researched-challenger-presets).
 
 Notes:
 - **repetition_penalty** is LFM2.5's documented anti-loop knob and is sent as llama.cpp
@@ -219,9 +226,9 @@ Multi-token prediction: every Gemma run uses a separate `mtp-*.gguf` draft file 
 Key dated verdicts are recorded here alongside the published generated results. Full
 current numbers live in `results/COMPARISON.md`, regenerated after each run:
 
-- **Current speed/accuracy leader: Mellum2-12B-A2.5B.** The 2026-07-29 full run gave it
-  36/36 in 156 seconds. Small Gemma thinking configs also reached the accuracy ceiling,
-  while Gemma 26B-A4B no-think was the fastest near-perfect direct configuration.
+- **Current speed/accuracy leader: Mellum2-12B-A2.5B.** Small Gemma thinking configs
+  also reach the accuracy ceiling, while Gemma 26B-A4B no-think is the fastest
+  near-perfect direct configuration. See the generated comparison for current numbers.
 - **Thinking is valuable only when the model can finish.** It consistently repairs
   math/reasoning failures in small Gemma and Qwen configs. The dense Qwen 27B instead
   repeatedly hit the request cap on coding, so its thinking and direct modes tied on

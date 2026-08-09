@@ -37,8 +37,9 @@ so a closed lid doesn't kill them.
 
 ## Configuration
 
-Per-flag `ModelConfig` semantics, `DEFAULT_SERVER_ARGS`, and the f16-vs-q8_0 KV
-justification: see `docs/configuration.md`.
+For the mandatory model-research checklist, per-flag `ModelConfig` semantics,
+`DEFAULT_SERVER_ARGS`, and the f16-vs-q8_0 KV justification, see
+`docs/configuration.md`.
 
 ## Test set
 
