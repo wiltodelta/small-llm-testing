@@ -21,3 +21,6 @@ results/*
 # Claude
 _refs/
 .claude/settings.local.json
+
+# Claude Code isolated worktrees (per-agent sandbox clones)
+.claude/worktrees/
