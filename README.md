@@ -2,21 +2,37 @@
 
 Benchmark small LLMs locally via [llama.cpp](https://github.com/ggml-org/llama.cpp) on Apple Silicon.
 
+## Quick model choice
+
+These are the latest measured results for the curated routine set. Score is mechanical
+accuracy on the 12-prompt suite (`/36`, three samples per prompt). `tok/s` measures
+generation on long responses; suite time also captures how much reasoning each model
+emits, so use both when choosing an interactive model.
+
+<!-- BEGIN GENERATED QUICK CHOICE -->
+Measured 2026-07-30 on Apple M5, 32 GB, with f16 KV.
+
+| Model | Quant | Mode | Score | Suite time | tok/s | Choose it for |
+|---|---|---|---:|---:|---:|---|
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 36/36 | 166s | 66.7 | Compact reasoning |
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | direct | 25/36 | 35s | 71.2 | Maximum compact-model throughput |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | think | 36/36 | 303s | 33.5 | Fast MoE reasoning |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 35/36 | 28s | 34.5 | Low-latency near-perfect answers |
+| [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Q8_0 | native | 35/36 | 192s | 30.2 | Small active-parameter MoE |
+| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 36/36 | 156s | 31.3 | Single-config coding and reasoning |
+<!-- END GENERATED QUICK CHOICE -->
+
+See the [full comparison](results/COMPARISON.md) for every measured configuration and
+the [raw benchmark data](results/benchmark.json) for reproducibility. Long sequential
+runs thermally throttle this Mac, so suite `tok/s` is best for relative comparison;
+measure peak decode speed with `llama-bench` on a cool machine.
+
 ## Default routine set
 
-The default run is deliberately small. It keeps the configurations that provide a
-distinct speed, size, or reasoning reference on this machine:
-
-| Model | Role | Quant |
-|-------|------|-------|
-| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Compact think/direct reference | Q8_0 + MTP |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | Fast interactive MoE, think/direct reference | UD-Q4_K_M + MTP |
-| [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Small active-parameter edge MoE | Q8_0 |
-| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Coding and reasoning leader | Q4_K_M |
-
-Gemma runs in both thinking and direct mode. Its separate `mtp-*.gguf` draft head is
-auto-attached for lossless speculative decoding. LFM and Mellum each run once using
-their documented default behavior.
+The six configurations in the quick-choice table are the default run. Gemma runs in
+both thinking and direct mode, with its separate `mtp-*.gguf` draft head auto-attached
+for lossless speculative decoding. LFM and Mellum each run once using their documented
+default behavior.
 
 ### Future benchmark policy
 
@@ -200,7 +216,7 @@ Multi-token prediction: every Gemma run uses a separate `mtp-*.gguf` draft file 
 
 ## Findings
 
-Key dated verdicts are recorded here because `results/` is local and gitignored. Full
+Key dated verdicts are recorded here alongside the published generated results. Full
 current numbers live in `results/COMPARISON.md`, regenerated after each run:
 
 - **Current speed/accuracy leader: Mellum2-12B-A2.5B.** The 2026-07-29 full run gave it
@@ -228,7 +244,9 @@ current numbers live in `results/COMPARISON.md`, regenerated after each run:
 
 ## Results
 
-See `results/COMPARISON.md` for the full table and per-model breakdown.
+See the [full comparison](results/COMPARISON.md), [per-prompt results](results/RESULTS.md),
+and [raw benchmark data](results/benchmark.json). Run `uv run python make_comparison.py`
+after a complete benchmark to refresh the comparison and README quick-choice table.
 
 **Reading the numbers:**
 

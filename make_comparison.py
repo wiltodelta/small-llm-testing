@@ -1,7 +1,7 @@
-"""Regenerate results/COMPARISON.md from results/benchmark.json.
+"""Regenerate published benchmark summaries from results/benchmark.json.
 
-COMPARISON.md is the analytical view (think vs no-think, fail breakdown) on top of the
-raw RESULTS.md. Run after a benchmark to refresh it:
+COMPARISON.md is the full analytical view (think vs no-think, fail breakdown). The
+README quick-choice table is refreshed from the same data. Run after a benchmark:
 
     uv run python make_comparison.py
 
@@ -14,10 +14,51 @@ import json
 import logging
 from pathlib import Path
 
-from benchmark import BenchmarkData, ModelDict, count_fail_kinds
+from benchmark import MODELS, BenchmarkData, ModelDict, count_fail_kinds
 
 log = logging.getLogger(__name__)
 RESULTS_DIR = Path(__file__).parent / "results"
+README_PATH = Path(__file__).parent / "README.md"
+QUICK_CHOICE_START = "<!-- BEGIN GENERATED QUICK CHOICE -->"
+QUICK_CHOICE_END = "<!-- END GENERATED QUICK CHOICE -->"
+QUICK_CHOICES = {
+    "gemma-4-e2b-Q8_0-think": (
+        "Gemma 4 E2B",
+        "Q8_0 + MTP",
+        "think",
+        "Compact reasoning",
+    ),
+    "gemma-4-e2b-Q8_0-nothink": (
+        "Gemma 4 E2B",
+        "Q8_0 + MTP",
+        "direct",
+        "Maximum compact-model throughput",
+    ),
+    "gemma-4-26b-a4b-Q4_K_M-think": (
+        "Gemma 4 26B-A4B",
+        "UD-Q4_K_M + MTP",
+        "think",
+        "Fast MoE reasoning",
+    ),
+    "gemma-4-26b-a4b-Q4_K_M-nothink": (
+        "Gemma 4 26B-A4B",
+        "UD-Q4_K_M + MTP",
+        "direct",
+        "Low-latency near-perfect answers",
+    ),
+    "lfm2.5-8b-a1b-Q8_0": (
+        "LFM2.5-8B-A1B",
+        "Q8_0",
+        "native",
+        "Small active-parameter MoE",
+    ),
+    "mellum2-12b-a2.5b-think-Q4_K_M": (
+        "Mellum2-12B-A2.5B",
+        "Q4_K_M",
+        "native think",
+        "Single-config coding and reasoning",
+    ),
+}
 
 
 def _fail_counts(model: ModelDict) -> tuple[int, int, int]:
@@ -39,12 +80,60 @@ def _think_pairs(models: dict[str, ModelDict]) -> list[str]:
     return sorted(bases)
 
 
+def _render_quick_choice(models: dict[str, ModelDict], timestamp: str) -> str:
+    """Render the README decision table from the current curated model results."""
+    curated_names = [model.name for model in MODELS]
+    if set(QUICK_CHOICES) != set(curated_names):
+        msg = "QUICK_CHOICES metadata must exactly match benchmark.MODELS"
+        raise ValueError(msg)
+    missing = [config for config in curated_names if config not in models]
+    if missing:
+        msg = f"benchmark.json is missing curated configs: {', '.join(missing)}"
+        raise ValueError(msg)
+    lines = [
+        f"Measured {timestamp[:10]} on Apple M5, 32 GB, with f16 KV.",
+        "",
+        "| Model | Quant | Mode | Score | Suite time | tok/s | Choose it for |",
+        "|---|---|---|---:|---:|---:|---|",
+    ]
+    for model_config in MODELS:
+        config = model_config.name
+        label, quant, mode, use_case = QUICK_CHOICES[config]
+        repo = model_config.hf.partition(":")[0]
+        model = models[config]
+        lines.append(
+            f"| [{label}](https://huggingface.co/{repo}) | {quant} | {mode} | "
+            f"{model['passes']}/{model['attempts_total']} | "
+            f"{model['total_time_s']:.0f}s | {model['gen_tok_per_s']:.1f} | {use_case} |"
+        )
+    return "\n".join(lines)
+
+
+def _write_if_changed(path: Path, content: str) -> bool:
+    """Write content only when it differs, returning whether the file changed."""
+    if path.exists() and path.read_text() == content:
+        return False
+    path.write_text(content)
+    return True
+
+
+def _replace_generated_block(text: str, replacement: str) -> str:
+    """Replace the unique generated README block while preserving its markers."""
+    if text.count(QUICK_CHOICE_START) != 1 or text.count(QUICK_CHOICE_END) != 1:
+        msg = "README must contain exactly one quick-choice marker pair"
+        raise ValueError(msg)
+    before, remainder = text.split(QUICK_CHOICE_START, maxsplit=1)
+    _, after = remainder.split(QUICK_CHOICE_END, maxsplit=1)
+    return f"{before}{QUICK_CHOICE_START}\n{replacement}\n{QUICK_CHOICE_END}{after}"
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     # json.loads is Any at the boundary; we trust benchmark.json matches the schema written by
     # benchmark._save_json. From here on the typed view lets pyright check every key access.
     data: BenchmarkData = json.loads((RESULTS_DIR / "benchmark.json").read_text())
     models: dict[str, ModelDict] = {m["model"]: m for m in data["models"]}
+    quick_choice = _render_quick_choice(models, data["timestamp"])
 
     lines: list[str] = [
         "# Benchmark comparison",
@@ -83,8 +172,14 @@ def main() -> None:
         )
 
     out = RESULTS_DIR / "COMPARISON.md"
-    out.write_text("\n".join(lines) + "\n")
-    log.info("Wrote %s (%d configs)", out, len(models))
+    comparison = "\n".join(lines) + "\n"
+    changed = _write_if_changed(out, comparison)
+    log.info("%s %s (%d configs)", "Wrote" if changed else "Unchanged", out, len(models))
+
+    original_readme = README_PATH.read_text()
+    readme = _replace_generated_block(original_readme, quick_choice)
+    changed = _write_if_changed(README_PATH, readme)
+    log.info("%s quick-choice table in %s", "Updated" if changed else "Unchanged", README_PATH)
 
 
 if __name__ == "__main__":
