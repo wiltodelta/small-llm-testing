@@ -24,3 +24,12 @@ _refs/
 
 # Claude Code isolated worktrees (per-agent sandbox clones)
 .claude/worktrees/
+
+# Other harnesses' generated config. Claude's sync owns these; a committed copy
+# is a second source nobody reconciles. Anchored so a same-named source file
+# deeper in the tree is not caught.
+/.agents/
+/.codex/
+/.opencode/
+/opencode.json
+/opencode.jsonc
