@@ -14,7 +14,11 @@ uv sync
 # Run the curated routine benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
-# Filter by substring match
+# Add current challengers, or run all 14 current text configurations
+uv run python benchmark.py --include-challengers
+uv run python benchmark.py --full-sweep
+
+# Explicit filters search the routine, challenger, and agentic text sets
 uv run python benchmark.py --model gemma-4-e2b   # both gemma-4-e2b modes
 uv run python benchmark.py --model -think        # all thinking configs
 
@@ -29,7 +33,8 @@ so a closed lid doesn't kill them.
 
 - `maintain.sh` -- the canonical Python gate, run after `uv sync`.
 - `benchmark.py` -- starts llama-server per model, runs 12 prompts x N samples,
-  saves per-model and aggregated results (`benchmark.json` + `RESULTS.md`)
+  and saves per-model results. A full sweep publishes `benchmark.json` and `RESULTS.md`
+  only after all selected configs finish.
 - `make_comparison.py` -- regenerates `results/COMPARISON.md` and the README quick-choice
   table from a complete `benchmark.json`; numbers are never hand-typed.
 - `tests/` -- pytest unit tests for the pure verifier logic (`v_number`, `v_json`,

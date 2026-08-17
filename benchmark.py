@@ -36,10 +36,23 @@ DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperat
 PYEXEC_TIMEOUT = 5  # seconds budget per coding test execution
 
 
+@dataclass(frozen=True)
+class SamplingPreset:
+    """Per-request sampler values for a model's alternate generation mode."""
+
+    temperature: float
+    top_p: float
+    top_k: int
+    presence_penalty: float = 0.0
+    repetition_penalty: float = 1.0
+
+
 @dataclass
 class ModelConfig:
     name: str
     hf: str
+    # Optional immutable Hugging Face commit for reproducible cache resolution.
+    revision: str | None = None
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 64
@@ -51,6 +64,14 @@ class ModelConfig:
     # `thinking` gates whether this config thinks on THINKING_CATEGORIES. It is enforced
     # per request via chat_template_kwargs when the model's template supports the toggle.
     thinking: bool = True
+    # Muse Glimmer uses a named reasoning strength instead of enable_thinking. When set,
+    # _chat requests this strength for thinking categories and `low` for direct prompts.
+    reasoning_strength: str | None = None
+    # Some hybrid models publish different samplers for thinking and direct modes.
+    # When set, direct prompts use this preset instead of the fields above.
+    direct_sampling: SamplingPreset | None = None
+    # OpenAI-compatible reasoning effort for models trained on named effort levels.
+    reasoning_effort: str | None = None
 
 
 def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[ModelConfig]:
@@ -86,6 +107,96 @@ MODELS: list[ModelConfig] = [
         top_k=20,
     ),
 ]
+
+# Dated challengers remain outside the default routine so a normal benchmark does not
+# silently grow. Use --include-challengers for the routine plus current challengers,
+# --full-sweep to add North Mini Code, or --model to select one config directly.
+CHALLENGERS: list[ModelConfig] = [
+    ModelConfig(
+        name="lfm2.5-2.6b-Q8_0",
+        hf="LiquidAI/LFM2.5-2.6B-GGUF:LFM2.5-2.6B-Q8_0.gguf",
+        temperature=0.1,
+        top_p=1.0,
+        top_k=50,
+        repetition_penalty=1.1,
+        thinking=False,
+    ),
+    ModelConfig(
+        name="nanbeige4.2-3b-Q8_0-think",
+        hf="mradermacher/Nanbeige4.2-3B-GGUF:Nanbeige4.2-3B.Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+    ),
+    ModelConfig(
+        name="nanbeige4.2-3b-Q8_0-nothink",
+        hf="mradermacher/Nanbeige4.2-3B-GGUF:Nanbeige4.2-3B.Q8_0.gguf",
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        thinking=False,
+    ),
+    ModelConfig(
+        name="qwen3.8-27b-Q4_K_M-think",
+        hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
+        revision="fdd03b8bbd279c1694563650e79d85a2373d9934",
+        temperature=1.0,
+        top_p=0.95,
+        top_k=20,
+        thinking=True,
+        direct_sampling=SamplingPreset(
+            temperature=0.7,
+            top_p=0.8,
+            top_k=20,
+            presence_penalty=1.5,
+        ),
+        reasoning_effort="xhigh",
+    ),
+    ModelConfig(
+        name="qwen3.8-27b-Q4_K_M-nothink",
+        hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
+        revision="fdd03b8bbd279c1694563650e79d85a2373d9934",
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        presence_penalty=1.5,
+        thinking=False,
+    ),
+    ModelConfig(
+        name="nemotron-3.5-lightning-30b-a3b-Q3_K_M",
+        hf=("bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q3_K_M.gguf"),
+        temperature=1.0,
+        top_p=0.95,
+        top_k=0,
+        server_args=("--spec-type", "draft-mtp"),
+    ),
+    ModelConfig(
+        name="muse-glimmer-30b-high-Q4_K_XL",
+        hf="unsloth/Muse-Glimmer-30B-GGUF:Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        reasoning_strength="high",
+    ),
+]
+
+AGENTIC_TEXT_MODELS: list[ModelConfig] = [
+    ModelConfig(
+        name="north-mini-code-1.0-Q4_K_M",
+        hf="unsloth/North-Mini-Code-1.0-GGUF:North-Mini-Code-1.0-UD-Q4_K_M.gguf",
+        temperature=1.0,
+        top_p=0.95,
+        top_k=0,
+        server_args=("-c", "8192"),
+    )
+]
+
+CURRENT_TEXT_MODELS: tuple[ModelConfig, ...] = (*MODELS, *CHALLENGERS)
+FULL_SWEEP_MODELS: tuple[ModelConfig, ...] = (
+    *CURRENT_TEXT_MODELS,
+    *AGENTIC_TEXT_MODELS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +634,7 @@ class ModelResult:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_local_path(hf_spec: str) -> Path | None:
+def _resolve_local_path(hf_spec: str, *, revision: str | None = None) -> Path | None:
     """Resolve the cached local model file for an HF spec 'repo:filename'.
 
     Returns the model path, or None if not cached. The llama-server '-hf' resolver
@@ -535,10 +646,22 @@ def _resolve_local_path(hf_spec: str) -> Path | None:
         return None
     cache_name = f"models--{hf_repo.replace('/', '--')}"
     snapshots = HF_HUB_DIR / cache_name / "snapshots"
+    if revision is not None:
+        model_path = snapshots / revision / filename
+        return model_path if model_path.exists() else None
     if not snapshots.exists():
         return None
-    # Multiple snapshot dirs may exist from interrupted downloads; return the first
-    # that actually contains the requested file.
+
+    # Prefer the repository's current main revision instead of filesystem iteration
+    # order when multiple cached snapshots contain the same filename.
+    main_ref = HF_HUB_DIR / cache_name / "refs" / "main"
+    if main_ref.is_file():
+        main_revision = main_ref.read_text().strip()
+        model_path = snapshots / main_revision / filename
+        if model_path.exists():
+            return model_path
+
+    # Fall back for old or partial caches that do not have refs/main.
     for snap in snapshots.iterdir():
         model_path = snap / filename
         if model_path.exists():
@@ -546,9 +669,48 @@ def _resolve_local_path(hf_spec: str) -> Path | None:
     return None
 
 
+def _resolve_model_path(model: ModelConfig) -> Path | None:
+    """Resolve a model file, honoring its optional immutable repository revision."""
+    if model.revision is None:
+        return _resolve_local_path(model.hf)
+    return _resolve_local_path(model.hf, revision=model.revision)
+
+
 def _is_model_downloaded(model: ModelConfig) -> bool:
     """Check if the model is already cached locally."""
-    return _resolve_local_path(model.hf) is not None
+    return _resolve_model_path(model) is not None
+
+
+def _missing_model_assets(
+    models: Iterable[ModelConfig],
+    *,
+    require_weights: bool = True,
+) -> list[str]:
+    """Return unique missing GGUFs and required companion draft heads.
+
+    Routine runs may skip configs whose main weights were never downloaded, but a
+    downloaded config must never silently run without its configured companion head.
+    Full sweeps set ``require_weights`` so every selected config is preflighted.
+    """
+    missing: list[str] = []
+    checked: set[tuple[str, str | None]] = set()
+    for model in models:
+        asset = (model.hf, model.revision)
+        if asset in checked:
+            continue
+        checked.add(asset)
+        model_path = _resolve_model_path(model)
+        if model_path is None:
+            if require_weights:
+                missing.append(model.hf)
+            continue
+        if "unsloth/gemma-4-" in model.hf and not any(model_path.parent.glob("mtp-*.gguf")):
+            repo = model.hf.partition(":")[0]
+            missing.append(f"{repo}:mtp-*.gguf")
+        if "Muse-Glimmer" in model.hf and not (model_path.parent / "dflash-kquant.gguf").is_file():
+            repo = model.hf.partition(":")[0]
+            missing.append(f"{repo}:dflash-kquant.gguf")
+    return missing
 
 
 def _wait_for_server(port: int, timeout: int = SERVER_STARTUP_TIMEOUT) -> None:
@@ -592,7 +754,7 @@ DEFAULT_SERVER_ARGS: tuple[str, ...] = (
 
 def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
     """Start llama-server with the given model config (uses local cached file via -m)."""
-    model_path = _resolve_local_path(model.hf)
+    model_path = _resolve_model_path(model)
     if model_path is None:
         msg = f"Model file not cached: {model.hf}"
         raise FileNotFoundError(msg)
@@ -612,13 +774,36 @@ def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
         draft = next(iter(model_path.parent.glob("mtp-*.gguf")), None)
         if draft is not None:
             cmd += ["--model-draft", str(draft), "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "-np", "1"]
+        dflash = model_path.parent / "dflash-kquant.gguf"
+        if "Muse-Glimmer" in model.hf and dflash.is_file():
+            cmd += [
+                "--spec-draft-model",
+                str(dflash),
+                "--spec-draft-ngl",
+                "all",
+                "--spec-type",
+                "draft-dflash",
+                "--spec-draft-n-max",
+                "15",
+                "-np",
+                "1",
+            ]
     log.info("Starting server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _wait_for_server(port)
+    try:
+        _wait_for_server(port)
+    except BaseException:
+        # _start_server has not returned the process to its caller yet, so it owns
+        # cleanup for every startup failure, including Ctrl-C during model loading.
+        _stop_server(proc)
+        raise
     return proc
 
 
 def _stop_server(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        log.info("Server already stopped")
+        return
     proc.terminate()
     try:
         proc.wait(timeout=10)
@@ -643,21 +828,37 @@ def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, 
     # Thinking mode needs more headroom than direct answers. 16k covers these short
     # benchmark prompts without truncation.
     max_tokens = 16384 if thinking else 4096
+    template_kwargs: dict[str, object] = {"enable_thinking": thinking}
+    if model_cfg.reasoning_strength is not None:
+        template_kwargs["reasoning_strength"] = model_cfg.reasoning_strength if thinking else "low"
+    sampling = (
+        model_cfg.direct_sampling
+        if not thinking and model_cfg.direct_sampling is not None
+        else SamplingPreset(
+            temperature=model_cfg.temperature,
+            top_p=model_cfg.top_p,
+            top_k=model_cfg.top_k,
+            presence_penalty=model_cfg.presence_penalty,
+            repetition_penalty=model_cfg.repetition_penalty,
+        )
+    )
     req_body: dict[str, object] = {
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": model_cfg.temperature,
-        "top_p": model_cfg.top_p,
-        "top_k": model_cfg.top_k,
+        "temperature": sampling.temperature,
+        "top_p": sampling.top_p,
+        "top_k": sampling.top_k,
         # Explicitly pin min_p=0 so a server default cannot clip the sampling tail.
         "min_p": 0,
-        "presence_penalty": model_cfg.presence_penalty,
+        "presence_penalty": sampling.presence_penalty,
         # llama.cpp's native name for repetition_penalty (1.0 = off).
-        "repeat_penalty": model_cfg.repetition_penalty,
+        "repeat_penalty": sampling.repetition_penalty,
         # Send enable_thinking explicitly both ways. Templates with a toggle honor it;
         # models without one ignore the unknown kwarg.
-        "chat_template_kwargs": {"enable_thinking": thinking},
+        "chat_template_kwargs": template_kwargs,
     }
+    if thinking and model_cfg.reasoning_effort is not None:
+        req_body["reasoning_effort"] = model_cfg.reasoning_effort
     payload = json.dumps(req_body, ensure_ascii=False).encode()
 
     req = urllib.request.Request(
@@ -727,6 +928,8 @@ def run_benchmark(
     models: list[ModelConfig] | None = None,
     port: int = DEFAULT_PORT,
     n: int = DEFAULT_N_RUNS,
+    *,
+    save_aggregate_progress: bool = True,
 ) -> list[ModelResult]:
     """Run all prompts against the selected models. Each prompt is sampled `n` times."""
     if models is None:
@@ -751,9 +954,11 @@ def run_benchmark(
                 pr = _run_prompt(prompt, model, port, n)
                 mr.prompts.append(pr)
             results.append(mr)
-            # Persist after each model so a crash/sleep does not lose prior results.
-            _save_json(results)
-            _save_markdown(results)
+            # Routine runs publish aggregate progress immediately. A full sweep disables
+            # this so a failed overnight run cannot replace the canonical complete data.
+            if save_aggregate_progress:
+                _save_json(results)
+                _save_markdown(results)
             per_model_path = RESULTS_DIR / f"benchmark.{model.name}.json"
             per_model_data: BenchmarkData = {
                 "timestamp": datetime.now(tz=UTC).isoformat(),
@@ -931,7 +1136,18 @@ def _parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default=None,
-        help="Run only the model with this name (substring match)",
+        help="Run any matching supported text configs (substring match)",
+    )
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--include-challengers",
+        action="store_true",
+        help="Append the current text challengers to the curated routine set",
+    )
+    scope.add_argument(
+        "--full-sweep",
+        action="store_true",
+        help="Run all current text configurations, including North Mini Code",
     )
     parser.add_argument(
         "-n",
@@ -943,6 +1159,22 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _select_models(
+    model_filter: str | None,
+    *,
+    include_challengers: bool,
+    full_sweep: bool = False,
+) -> list[ModelConfig]:
+    """Select the routine, current, full, or explicitly filtered text set."""
+    if model_filter:
+        return [model for model in FULL_SWEEP_MODELS if model_filter in model.name]
+    if full_sweep:
+        return list(FULL_SWEEP_MODELS)
+    if include_challengers:
+        return list(CURRENT_TEXT_MODELS)
+    return list(MODELS)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -951,15 +1183,38 @@ def main() -> None:
     )
 
     args = _parse_args()
-    models = list(MODELS)
+    models = _select_models(
+        args.model,
+        include_challengers=args.include_challengers,
+        full_sweep=args.full_sweep,
+    )
+    if not models:
+        log.error("No model matching '%s' found", args.model)
+        return
+    missing = _missing_model_assets(models, require_weights=args.full_sweep)
+    if missing:
+        scope = "Full sweep" if args.full_sweep else "Selected models"
+        log.error("%s not ready; missing %d required model assets", scope, len(missing))
+        for asset in missing:
+            log.error("Missing: %s", asset)
+        raise SystemExit(2)
 
-    if args.model:
-        models = [m for m in models if args.model in m.name]
-        if not models:
-            log.error("No model matching '%s' found", args.model)
-            return
-
-    results = run_benchmark(models, port=args.port, n=args.n_runs)
+    results = run_benchmark(
+        models,
+        port=args.port,
+        n=args.n_runs,
+        save_aggregate_progress=not args.full_sweep,
+    )
+    if not results:
+        log.error("No models completed; canonical results unchanged")
+        raise SystemExit(3)
+    if args.full_sweep and len(results) != len(models):
+        log.error(
+            "Full sweep incomplete: finished %d of %d configs; canonical results unchanged",
+            len(results),
+            len(models),
+        )
+        raise SystemExit(3)
     _save_json(results)
     _save_markdown(results)
 

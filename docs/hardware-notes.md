@@ -8,6 +8,8 @@ a one-line Swift Metal query (do not guess it):
 
 - Gemma 4 26B-A4B Q4_K_M (~16.8 GB) and Qwen 3.6 27B Q4_K_M (~16.8 GB) fit
   comfortably (these were OOM / kernel-panic on the old 16 GB machine).
+- Qwen3.8-27B Q4_K_M is a 17.1 GB text-model artifact. It is prepared as a challenger,
+  but fit is not claimed until a separately authorized model-load check succeeds.
 - North Mini Code 1.0 UD-Q4_K_M (~19.2 GB) loaded at `-c 8192` with full Metal
   offload on llama.cpp build 10090 and completed the text suite without a memory error.
 - Qwen 3.6 35B-A3B UD-Q4_K_M (~21 GB) loaded at `-c 8192` during the broad sweep.

@@ -6,17 +6,25 @@ all results. These tests pin their behavior with no llama-server dependency.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 
 import benchmark
 from benchmark import (
+    AGENTIC_TEXT_MODELS,
+    CHALLENGERS,
+    CURRENT_TEXT_MODELS,
+    FULL_SWEEP_MODELS,
     MODELS,
     PROMPTS,
+    _missing_model_assets,
     _run_one_attempt,
+    _select_models,
     _strip_think,
     fail_kind,
+    run_benchmark,
     v_json,
     v_number,
     v_python_exec,
@@ -38,6 +46,381 @@ def test_default_model_set_is_curated() -> None:
         "lfm2.5-8b-a1b-Q8_0",
         "mellum2-12b-a2.5b-think-Q4_K_M",
     }
+
+
+def test_challenger_model_set_is_explicit() -> None:
+    assert {model.name for model in CHALLENGERS} == {
+        "lfm2.5-2.6b-Q8_0",
+        "nanbeige4.2-3b-Q8_0-think",
+        "nanbeige4.2-3b-Q8_0-nothink",
+        "qwen3.8-27b-Q4_K_M-think",
+        "qwen3.8-27b-Q4_K_M-nothink",
+        "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
+        "muse-glimmer-30b-high-Q4_K_XL",
+    }
+    assert len(CURRENT_TEXT_MODELS) == len(MODELS) + len(CHALLENGERS)
+
+
+def test_full_sweep_model_set_is_explicit_and_unique() -> None:
+    assert {model.name for model in AGENTIC_TEXT_MODELS} == {"north-mini-code-1.0-Q4_K_M"}
+    assert len(FULL_SWEEP_MODELS) == 14
+    assert len({model.name for model in FULL_SWEEP_MODELS}) == len(FULL_SWEEP_MODELS)
+
+
+def test_select_models_defaults_to_curated() -> None:
+    assert _select_models(None, include_challengers=False) == MODELS
+
+
+def test_select_models_includes_challengers() -> None:
+    assert _select_models(None, include_challengers=True) == list(CURRENT_TEXT_MODELS)
+
+
+def test_select_models_full_sweep() -> None:
+    assert _select_models(None, include_challengers=False, full_sweep=True) == list(FULL_SWEEP_MODELS)
+
+
+def test_select_models_filter_searches_challengers() -> None:
+    selected = _select_models("nanbeige", include_challengers=False)
+    assert selected == CHALLENGERS[1:3]
+
+
+def test_qwen38_presets_match_official_thinking_modes() -> None:
+    selected = _select_models("qwen3.8", include_challengers=False)
+
+    assert [model.name for model in selected] == [
+        "qwen3.8-27b-Q4_K_M-think",
+        "qwen3.8-27b-Q4_K_M-nothink",
+    ]
+    thinking, direct = selected
+    expected_revision = "fdd03b8bbd279c1694563650e79d85a2373d9934"
+    assert thinking.revision == direct.revision == expected_revision
+    assert thinking.reasoning_effort == "xhigh"
+    assert thinking.direct_sampling == benchmark.SamplingPreset(
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        presence_penalty=1.5,
+    )
+    assert direct.thinking is False
+    assert (direct.temperature, direct.top_p, direct.top_k, direct.presence_penalty) == (0.7, 0.8, 20, 1.5)
+
+
+def test_resolve_local_path_honors_pinned_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "models--example--model"
+    expected = cache / "snapshots" / "pinned" / "model.gguf"
+    current = cache / "snapshots" / "current" / "model.gguf"
+    expected.parent.mkdir(parents=True)
+    current.parent.mkdir(parents=True)
+    expected.touch()
+    current.touch()
+    (cache / "refs").mkdir()
+    (cache / "refs" / "main").write_text("current")
+    monkeypatch.setattr(benchmark, "HF_HUB_DIR", tmp_path)
+
+    assert benchmark._resolve_local_path("example/model:model.gguf") == current
+    assert benchmark._resolve_local_path("example/model:model.gguf", revision="pinned") == expected
+    assert benchmark._resolve_local_path("example/model:model.gguf", revision="missing") is None
+
+
+def test_nemotron_uses_embedded_mtp() -> None:
+    selected = _select_models("nemotron-3.5", include_challengers=False)
+
+    assert len(selected) == 1
+    assert selected[0].server_args == ("--spec-type", "draft-mtp")
+    assert selected[0].top_k == 0
+
+
+def test_select_models_filter_excludes_retired_models_and_searches_agentic_set() -> None:
+    assert _select_models("qwen3.6", include_challengers=False) == []
+    assert _select_models("north-mini", include_challengers=False) == AGENTIC_TEXT_MODELS
+
+
+def test_missing_model_assets_deduplicates_shared_weight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_path(hf: str, *, revision: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", missing_path)
+
+    assert _missing_model_assets(CHALLENGERS[1:3]) == [CHALLENGERS[1].hf]
+
+
+def test_missing_model_assets_allows_absent_weights_outside_full_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_path(hf: str, *, revision: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", missing_path)
+
+    assert _missing_model_assets(CHALLENGERS, require_weights=False) == []
+
+
+def test_missing_model_assets_requires_gemma_mtp_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "gemma.gguf"
+    model_path.touch()
+
+    def resolved_path(hf: str) -> Path:
+        return model_path
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
+
+    assert _missing_model_assets(MODELS[:2]) == ["unsloth/gemma-4-E2B-it-GGUF:mtp-*.gguf"]
+
+
+def test_missing_model_assets_requires_muse_dflash_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "muse.gguf"
+    model_path.touch()
+
+    def resolved_path(hf: str) -> Path:
+        return model_path
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
+
+    expected = ["unsloth/Muse-Glimmer-30B-GGUF:dflash-kquant.gguf"]
+    assert _missing_model_assets(CHALLENGERS[-1:]) == expected
+    assert _missing_model_assets(CHALLENGERS[-1:], require_weights=False) == expected
+
+
+def test_start_server_attaches_muse_dflash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "muse.gguf"
+    model_path.touch()
+    (tmp_path / "dflash-kquant.gguf").touch()
+    captured: list[str] = []
+
+    def popen(cmd: list[str], **kwargs: object) -> object:
+        captured.extend(cmd)
+        return object()
+
+    def resolved_path(hf: str) -> Path:
+        return model_path
+
+    def wait_for_server(port: int) -> None:
+        return None
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
+    monkeypatch.setattr(benchmark.subprocess, "Popen", popen)
+    monkeypatch.setattr(benchmark, "_wait_for_server", wait_for_server)
+
+    benchmark._start_server(CHALLENGERS[-1], 8081)
+
+    assert captured[captured.index("--spec-type") + 1] == "draft-dflash"
+    assert captured[captured.index("--spec-draft-n-max") + 1] == "15"
+    assert str(tmp_path / "dflash-kquant.gguf") in captured
+
+
+def test_start_server_stops_process_when_health_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "model.gguf"
+    model_path.touch()
+
+    class Process:
+        terminated = False
+        waited = False
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: int | None = None) -> None:
+            self.waited = True
+
+    process = Process()
+
+    def popen(cmd: list[str], **kwargs: object) -> Process:
+        return process
+
+    def resolved_path(hf: str) -> Path:
+        return model_path
+
+    def wait_for_server(port: int) -> None:
+        raise TimeoutError
+
+    monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
+    monkeypatch.setattr(benchmark.subprocess, "Popen", popen)
+    monkeypatch.setattr(benchmark, "_wait_for_server", wait_for_server)
+
+    with pytest.raises(TimeoutError):
+        benchmark._start_server(MODELS[-1], 8081)
+
+    assert process.terminated
+    assert process.waited
+
+
+@pytest.mark.parametrize(("thinking", "expected"), [(False, "low"), (True, "high")])
+def test_chat_sends_muse_reasoning_strength(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: bool,
+    expected: str,
+) -> None:
+    payloads: list[dict[str, object]] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 1}}).encode()
+
+    def urlopen(request: object, timeout: int) -> Response:
+        payloads.append(json.loads(request.data.decode()))
+        return Response()
+
+    monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
+
+    benchmark._chat([{"role": "user", "content": "test"}], CHALLENGERS[-1], 8081, thinking=thinking)
+
+    assert payloads[0]["chat_template_kwargs"] == {
+        "enable_thinking": thinking,
+        "reasoning_strength": expected,
+    }
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected_sampling", "expected_effort"),
+    [
+        (True, (1.0, 0.95, 20, 0.0), "xhigh"),
+        (False, (0.7, 0.8, 20, 1.5), None),
+    ],
+)
+def test_chat_sends_qwen38_mode_specific_preset(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: bool,
+    expected_sampling: tuple[float, float, int, float],
+    expected_effort: str | None,
+) -> None:
+    payloads: list[dict[str, object]] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 1}}).encode()
+
+    def urlopen(request: object, timeout: int) -> Response:
+        payloads.append(json.loads(request.data.decode()))
+        return Response()
+
+    monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
+    qwen_thinking = _select_models("qwen3.8", include_challengers=False)[0]
+
+    benchmark._chat([{"role": "user", "content": "test"}], qwen_thinking, 8081, thinking=thinking)
+
+    payload = payloads[0]
+    actual_sampling = (payload["temperature"], payload["top_p"], payload["top_k"], payload["presence_penalty"])
+    assert actual_sampling == expected_sampling
+    assert payload["chat_template_kwargs"] == {"enable_thinking": thinking}
+    assert payload.get("reasoning_effort") == expected_effort
+
+
+def test_full_sweep_mode_does_not_publish_aggregate_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    aggregate_writes: list[str] = []
+
+    def is_downloaded(model: benchmark.ModelConfig) -> bool:
+        return True
+
+    def start_server(model: benchmark.ModelConfig, port: int) -> object:
+        return object()
+
+    def stop_server(proc: object) -> None:
+        return None
+
+    def save_json(results: list[benchmark.ModelResult]) -> Path:
+        aggregate_writes.append("json")
+        return tmp_path / "benchmark.json"
+
+    def save_markdown(results: list[benchmark.ModelResult]) -> Path:
+        aggregate_writes.append("markdown")
+        return tmp_path / "RESULTS.md"
+
+    monkeypatch.setattr(benchmark, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(benchmark, "PROMPTS", [])
+    monkeypatch.setattr(benchmark, "_is_model_downloaded", is_downloaded)
+    monkeypatch.setattr(benchmark, "_start_server", start_server)
+    monkeypatch.setattr(benchmark, "_stop_server", stop_server)
+    monkeypatch.setattr(benchmark, "_save_json", save_json)
+    monkeypatch.setattr(benchmark, "_save_markdown", save_markdown)
+
+    results = run_benchmark([MODELS[0]], save_aggregate_progress=False)
+
+    assert len(results) == 1
+    assert aggregate_writes == []
+    assert (tmp_path / f"benchmark.{MODELS[0].name}.json").exists()
+
+
+def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Args:
+        model = "muse-glimmer"
+        include_challengers = False
+        full_sweep = False
+        port = 8081
+        n_runs = 1
+
+    aggregate_writes: list[str] = []
+
+    def no_missing_assets(
+        models: list[benchmark.ModelConfig],
+        *,
+        require_weights: bool,
+    ) -> list[str]:
+        return []
+
+    def no_results(
+        models: list[benchmark.ModelConfig],
+        port: int,
+        n: int,
+        *,
+        save_aggregate_progress: bool,
+    ) -> list[benchmark.ModelResult]:
+        return []
+
+    def save_json(results: list[benchmark.ModelResult]) -> None:
+        aggregate_writes.append("json")
+
+    def save_markdown(results: list[benchmark.ModelResult]) -> None:
+        aggregate_writes.append("markdown")
+
+    monkeypatch.setattr(benchmark, "_parse_args", Args)
+    monkeypatch.setattr(benchmark, "_missing_model_assets", no_missing_assets)
+    monkeypatch.setattr(benchmark, "run_benchmark", no_results)
+    monkeypatch.setattr(benchmark, "_save_json", save_json)
+    monkeypatch.setattr(benchmark, "_save_markdown", save_markdown)
+
+    with pytest.raises(SystemExit, match="3"):
+        benchmark.main()
+
+    assert aggregate_writes == []
 
 
 def test_api_error_records_elapsed_wall_time(monkeypatch: pytest.MonkeyPatch) -> None:
