@@ -14,7 +14,7 @@ Fara remains outside them because its evaluation requires screenshots and browse
 Each `ModelConfig` defines:
 
 - `revision`, an optional immutable Hugging Face commit used to resolve the exact
-  cached artifact. Qwen3.8 is pinned to `fdd03b8bbd279c1694563650e79d85a2373d9934`.
+  cached artifact. Qwen3.8-27B is pinned to `fdd03b8bbd279c1694563650e79d85a2373d9934`.
 - `temperature`, `top_p`, and `top_k`, verified against the model's official card.
 - `presence_penalty` and `repetition_penalty`, defaulting to no-ops.
   `repetition_penalty` is sent to llama.cpp as `repeat_penalty`; LFM2.5 uses its
@@ -26,7 +26,7 @@ Each `ModelConfig` defines:
 - `reasoning_strength`, used by Muse Glimmer. The requested strength applies to
   `THINKING_CATEGORIES`; direct prompts explicitly use `low`.
 - `direct_sampling`, used when a hybrid model documents a different sampler for direct
-  requests. Qwen3.8's thinking config uses it on the suite's non-thinking categories.
+  requests. Qwen3.8-27B's thinking config uses it on the suite's non-thinking categories.
 - `reasoning_effort`, sent as an OpenAI-compatible top-level request field for thinking
   requests. llama.cpp maps it into the chat-template kwargs.
 - `server_args`, for model-specific llama-server overrides.
@@ -89,7 +89,7 @@ All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0
 LFM2.5-2.6B and Nanbeige4.2-3B are specified below because they were researched as
 challengers. Fara1.5-4B is also below, but it is rerun separately from the text sweep.
 
-Qwen3.8 uses Unsloth's 17.1 GB `Q4_K_M` GGUF at immutable repository revision
+Qwen3.8-27B uses Unsloth's 17.1 GB `Q4_K_M` GGUF at immutable repository revision
 `fdd03b8bbd279c1694563650e79d85a2373d9934` for the text-only suite. The optional
 roughly 0.93 GB vision projector is intentionally omitted. The official card recommends
 thinking sampling `temperature=1`, `top_p=.95`, `top_k=20`, neutral penalties, and
