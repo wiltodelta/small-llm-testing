@@ -17,12 +17,17 @@
   next config, so it cannot retain the port and cascade the failure through a full sweep.
 - OLMo 3.1 32B needs `--jinja` and a current llama.cpp. Build 9590 failed on its
   `tojson` filter; build 10090 loads the original template and serves valid completions.
-- Muse Glimmer requires llama.cpp PR #26841. Homebrew stable build 10330 predates the
-  merge and fails with `unknown model architecture: 'muse-glimmer'`; HEAD build 10358
-  loads the `UD-Q4_K_XL` model and quantized DFlash drafter successfully.
-- Nemotron 3.5 Lightning GGUFs were produced with llama.cpp build 10362 and require
-  that build or newer. The local preset uses the 19.82 GB `Q3_K_M`; `Q4_K_M` alone is
-  25.48 GB and exceeds this Mac's 24.96 GB Metal working-set ceiling before caches.
+- Ling-3.0-tiny needs llama.cpp PR #26608 (BailingMoE3, build 10544+). PATH
+  `llama-server` is `llama-cpp-bundled` 10380 and fails to load it. A Homebrew
+  `llama.cpp` HEAD-6503355 binary exists under Cellar but is not linked, because
+  it conflicts with `llama-cpp-bundled`. Do not `brew link --overwrite` that
+  without choosing which formula owns `/opt/homebrew/bin/llama-server`.
+- Muse Glimmer needed llama.cpp PR #26841. It is retired from reruns; the note
+  remains only for historical snapshots.
+- Nemotron 3.5 Lightning GGUFs need llama.cpp 10362+. The local `Q3_K_M` is a
+  memory-safe quant (`Q4_K_M` is 25.48 GB). A 300s `REQUEST_TIMEOUT` cannot finish
+  the 4,096-token long-context cap at ~5 tok/s; those fails are timeouts, not wrong
+  answers. HTTP API errors now store status and body in `fail_reason`.
 - Do not run a benchmark concurrently with large model downloads. A ~17 GB model in the
   GPU working set plus a multi-GB download piling on memory pressure gets llama-server
   killed by macOS jetsam mid-run (the log cuts off with no traceback). Finish downloads

@@ -14,7 +14,7 @@ uv sync
 # Run the curated routine benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
-# Add current challengers, or run all 14 current text configurations
+# Add current challengers, or run all 10 current text configurations
 uv run python benchmark.py --include-challengers
 uv run python benchmark.py --full-sweep
 
@@ -22,21 +22,24 @@ uv run python benchmark.py --full-sweep
 uv run python benchmark.py --model gemma-4-e2b   # both gemma-4-e2b modes
 uv run python benchmark.py --model -think        # all thinking configs
 
+# Category-filtered reliability recheck (high n); never publishes canonical results
+uv run python benchmark.py --model gemma-4-e2b --category structured,consistency -n 20
+
 # Quick smoke test
 uv run python benchmark.py -n 1
 ```
 
-Default llama-server port: **8080**. Wrap long runs with `nohup caffeinate -dimu`
-so a closed lid doesn't kill them.
+Default llama-server port: **8080**.
 
 ## Scripts
 
 - `maintain.sh` -- the canonical Python gate, run after `uv sync`.
-- `benchmark.py` -- starts llama-server per model, runs 12 prompts x N samples,
-  and saves per-model results. A full sweep publishes `benchmark.json` and `RESULTS.md`
-  only after all selected configs finish.
+- `benchmark.py` -- starts llama-server per model, runs the 22-prompt suite
+  (text core plus agent-scenario categories) x N samples, and saves per-model results.
+  A full sweep publishes `benchmark.json` and `RESULTS.md` only after all selected
+  configs finish; `--category` runs never publish canonical results.
 - `make_comparison.py` -- regenerates `results/COMPARISON.md` and the README quick-choice
-  table from a complete `benchmark.json`; numbers are never hand-typed.
+  table from a complete `benchmark.json`.
 - `tests/` -- pytest unit tests for the pure verifier logic (`v_number`, `v_json`,
   `v_python_exec`, ...) and the comparison aggregation helpers. No llama-server needed.
 
@@ -48,7 +51,7 @@ For the mandatory model-research checklist, per-flag `ModelConfig` semantics,
 
 ## Test set
 
-Verifier catalog, `/36` scoring, per-category rationale, and the think/no-think
+Verifier catalog, `/66` scoring, per-category rationale, and the think/no-think
 evaluation method: see `docs/benchmark-design.md`.
 
 ## Result files
@@ -56,7 +59,8 @@ evaluation method: see `docs/benchmark-design.md`.
 - `results/benchmark.json`, `results/RESULTS.md`, and `results/COMPARISON.md` -- published
   canonical raw data, prompt detail, and cross-run comparison.
 - `results/benchmark.<model-name>.json` -- gitignored per-model snapshot (saved after each
-  model finishes; safe against mid-run crashes/sleep).
+  model finishes; safe against mid-run crashes/sleep). Category-filtered runs write
+  `results/benchmark.<model-name>.<categories>.json` instead, never the canonical files.
 
 ## Known issues
 

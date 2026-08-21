@@ -56,7 +56,7 @@ QUICK_CHOICES = {
         "Mellum2-12B-A2.5B",
         "Q4_K_M",
         "native think",
-        "Single-config coding and reasoning",
+        "Background wiki-audit agent",
     ),
 }
 
@@ -134,12 +134,16 @@ def main() -> None:
     data: BenchmarkData = json.loads((RESULTS_DIR / "benchmark.json").read_text())
     models: dict[str, ModelDict] = {m["model"]: m for m in data["models"]}
     quick_choice = _render_quick_choice(models, data["timestamp"])
+    # The suite size changed with the agent-scenario expansion, so the denominator is
+    # computed from the data rather than hardcoded: old benchmark.json files stay honest.
+    suite_attempts = max(m["attempts_total"] for m in data["models"])
 
     lines: list[str] = [
         "# Benchmark comparison",
         "",
         f"Generated from `benchmark.json` ({data['timestamp']}). Apple M5, 32 GB, f16 KV.",
-        "Test set: 12-prompt text discriminating core, n=3. Every config scores out of `/36`.",
+        f"Test set: discriminating text core plus agent-scenario categories, n=3 per prompt. "
+        f"Every config scores out of `/{suite_attempts}`.",
         "",
         "Caveats: (1) fails split `wrong/timeout/empty` -- a timeout is too-slow-to-finish,",
         "not a wrong answer. (2) `tok/s` from this long suite is thermally throttled toward",

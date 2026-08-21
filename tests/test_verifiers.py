@@ -6,7 +6,9 @@ all results. These tests pin their behavior with no llama-server dependency.
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 from typing import TYPE_CHECKING
 
 import pytest
@@ -19,6 +21,8 @@ from benchmark import (
     FULL_SWEEP_MODELS,
     MODELS,
     PROMPTS,
+    ModelConfig,
+    SamplingPreset,
     _missing_model_assets,
     _run_one_attempt,
     _select_models,
@@ -35,6 +39,16 @@ from benchmark import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+# Retired Muse config kept so DFlash attach and reasoning_strength stay tested.
+_RETIRED_MUSE = ModelConfig(
+    name="muse-glimmer-30b-high-Q4_K_XL",
+    hf="unsloth/Muse-Glimmer-30B-GGUF:Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+    temperature=1.0,
+    top_p=0.95,
+    top_k=64,
+    reasoning_strength="high",
+)
+
 
 def test_default_model_set_is_curated() -> None:
     # Literal names intentionally pin the routine core; do not derive this set from MODELS.
@@ -50,20 +64,16 @@ def test_default_model_set_is_curated() -> None:
 
 def test_challenger_model_set_is_explicit() -> None:
     assert {model.name for model in CHALLENGERS} == {
-        "lfm2.5-2.6b-Q8_0",
-        "nanbeige4.2-3b-Q8_0-think",
-        "nanbeige4.2-3b-Q8_0-nothink",
         "qwen3.8-27b-Q4_K_M-think",
         "qwen3.8-27b-Q4_K_M-nothink",
         "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
-        "muse-glimmer-30b-high-Q4_K_XL",
     }
     assert len(CURRENT_TEXT_MODELS) == len(MODELS) + len(CHALLENGERS)
 
 
 def test_full_sweep_model_set_is_explicit_and_unique() -> None:
     assert {model.name for model in AGENTIC_TEXT_MODELS} == {"north-mini-code-1.0-Q4_K_M"}
-    assert len(FULL_SWEEP_MODELS) == 14
+    assert len(FULL_SWEEP_MODELS) == 10
     assert len({model.name for model in FULL_SWEEP_MODELS}) == len(FULL_SWEEP_MODELS)
 
 
@@ -77,32 +87,6 @@ def test_select_models_includes_challengers() -> None:
 
 def test_select_models_full_sweep() -> None:
     assert _select_models(None, include_challengers=False, full_sweep=True) == list(FULL_SWEEP_MODELS)
-
-
-def test_select_models_filter_searches_challengers() -> None:
-    selected = _select_models("nanbeige", include_challengers=False)
-    assert selected == CHALLENGERS[1:3]
-
-
-def test_qwen38_presets_match_official_thinking_modes() -> None:
-    selected = _select_models("qwen3.8", include_challengers=False)
-
-    assert [model.name for model in selected] == [
-        "qwen3.8-27b-Q4_K_M-think",
-        "qwen3.8-27b-Q4_K_M-nothink",
-    ]
-    thinking, direct = selected
-    expected_revision = "fdd03b8bbd279c1694563650e79d85a2373d9934"
-    assert thinking.revision == direct.revision == expected_revision
-    assert thinking.reasoning_effort == "xhigh"
-    assert thinking.direct_sampling == benchmark.SamplingPreset(
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        presence_penalty=1.5,
-    )
-    assert direct.thinking is False
-    assert (direct.temperature, direct.top_p, direct.top_k, direct.presence_penalty) == (0.7, 0.8, 20, 1.5)
 
 
 def test_resolve_local_path_honors_pinned_revision(
@@ -125,17 +109,45 @@ def test_resolve_local_path_honors_pinned_revision(
     assert benchmark._resolve_local_path("example/model:model.gguf", revision="missing") is None
 
 
+def test_select_models_filter_excludes_retired_models_and_searches_agentic_set() -> None:
+    assert _select_models("qwen3.6", include_challengers=False) == []
+    assert _select_models("nanbeige", include_challengers=False) == []
+    assert _select_models("muse-glimmer", include_challengers=False) == []
+    assert _select_models("lfm2.5-2.6b", include_challengers=False) == []
+    assert [model.name for model in _select_models("qwen3.8", include_challengers=False)] == [
+        "qwen3.8-27b-Q4_K_M-think",
+        "qwen3.8-27b-Q4_K_M-nothink",
+    ]
+    assert [model.name for model in _select_models("nemotron", include_challengers=False)] == [
+        "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
+    ]
+    assert _select_models("north-mini", include_challengers=False) == AGENTIC_TEXT_MODELS
+
+
+def test_qwen38_presets_match_official_thinking_modes() -> None:
+    thinking, direct = _select_models("qwen3.8", include_challengers=False)
+    assert thinking.reasoning_effort == "xhigh"
+    assert thinking.direct_sampling == SamplingPreset(
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        presence_penalty=1.5,
+    )
+    assert direct.thinking is False
+    assert (direct.temperature, direct.top_p, direct.top_k, direct.presence_penalty) == (
+        0.7,
+        0.8,
+        20,
+        1.5,
+    )
+    assert thinking.revision == direct.revision == "fdd03b8bbd279c1694563650e79d85a2373d9934"
+
+
 def test_nemotron_uses_embedded_mtp() -> None:
     selected = _select_models("nemotron-3.5", include_challengers=False)
-
     assert len(selected) == 1
     assert selected[0].server_args == ("--spec-type", "draft-mtp")
     assert selected[0].top_k == 0
-
-
-def test_select_models_filter_excludes_retired_models_and_searches_agentic_set() -> None:
-    assert _select_models("qwen3.6", include_challengers=False) == []
-    assert _select_models("north-mini", include_challengers=False) == AGENTIC_TEXT_MODELS
 
 
 def test_missing_model_assets_deduplicates_shared_weight(
@@ -146,7 +158,7 @@ def test_missing_model_assets_deduplicates_shared_weight(
 
     monkeypatch.setattr(benchmark, "_resolve_local_path", missing_path)
 
-    assert _missing_model_assets(CHALLENGERS[1:3]) == [CHALLENGERS[1].hf]
+    assert _missing_model_assets(MODELS[:2]) == [MODELS[0].hf]
 
 
 def test_missing_model_assets_allows_absent_weights_outside_full_sweep(
@@ -188,8 +200,8 @@ def test_missing_model_assets_requires_muse_dflash_head(
     monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
 
     expected = ["unsloth/Muse-Glimmer-30B-GGUF:dflash-kquant.gguf"]
-    assert _missing_model_assets(CHALLENGERS[-1:]) == expected
-    assert _missing_model_assets(CHALLENGERS[-1:], require_weights=False) == expected
+    assert _missing_model_assets([_RETIRED_MUSE]) == expected
+    assert _missing_model_assets([_RETIRED_MUSE], require_weights=False) == expected
 
 
 def test_start_server_attaches_muse_dflash(
@@ -215,7 +227,7 @@ def test_start_server_attaches_muse_dflash(
     monkeypatch.setattr(benchmark.subprocess, "Popen", popen)
     monkeypatch.setattr(benchmark, "_wait_for_server", wait_for_server)
 
-    benchmark._start_server(CHALLENGERS[-1], 8081)
+    benchmark._start_server(_RETIRED_MUSE, 8081)
 
     assert captured[captured.index("--spec-type") + 1] == "draft-dflash"
     assert captured[captured.index("--spec-draft-n-max") + 1] == "15"
@@ -290,7 +302,7 @@ def test_chat_sends_muse_reasoning_strength(
 
     monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
 
-    benchmark._chat([{"role": "user", "content": "test"}], CHALLENGERS[-1], 8081, thinking=thinking)
+    benchmark._chat([{"role": "user", "content": "test"}], _RETIRED_MUSE, 8081, thinking=thinking)
 
     assert payloads[0]["chat_template_kwargs"] == {
         "enable_thinking": thinking,
@@ -330,9 +342,7 @@ def test_chat_sends_qwen38_mode_specific_preset(
         return Response()
 
     monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
-    qwen_thinking = _select_models("qwen3.8", include_challengers=False)[0]
-
-    benchmark._chat([{"role": "user", "content": "test"}], qwen_thinking, 8081, thinking=thinking)
+    benchmark._chat([{"role": "user", "content": "test"}], CHALLENGERS[0], 8081, thinking=thinking)
 
     payload = payloads[0]
     actual_sampling = (payload["temperature"], payload["top_p"], payload["top_k"], payload["presence_penalty"])
@@ -381,11 +391,12 @@ def test_full_sweep_mode_does_not_publish_aggregate_progress(
 
 def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
     class Args:
-        model = "muse-glimmer"
+        model = "gemma-4-e2b"
         include_challengers = False
         full_sweep = False
         port = 8081
         n_runs = 1
+        category = None
 
     aggregate_writes: list[str] = []
 
@@ -401,7 +412,9 @@ def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) ->
         port: int,
         n: int,
         *,
+        prompts: list[benchmark.Prompt],
         save_aggregate_progress: bool,
+        snapshot_tag: str | None,
     ) -> list[benchmark.ModelResult]:
         return []
 
@@ -435,6 +448,23 @@ def test_api_error_records_elapsed_wall_time(monkeypatch: pytest.MonkeyPatch) ->
 
     assert attempt.time_s == 7.25
     assert attempt.fail_reason == "api error: TimeoutError"
+
+
+def test_api_error_records_http_status_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_http(*args: object, **kwargs: object) -> None:
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:8080/v1/chat/completions",
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"unknown field"}}'),
+        )
+
+    monkeypatch.setattr(benchmark, "_chat", raise_http)
+
+    attempt = _run_one_attempt(PROMPTS[0], MODELS[0], port=8080)
+
+    assert attempt.fail_reason == 'api error: HTTPError 400 {"error":{"message":"unknown field"}}'
 
 
 def test_save_json_creates_nested_results_directory(
@@ -586,6 +616,24 @@ class TestVJson:
     def test_bool_not_confused_with_int(self) -> None:
         # In Python True == 1; the verifier must not accept True where 1 is wanted.
         ok, _ = v_json({"flag": 1})('{"flag": true}')
+        assert not ok
+
+    def test_array_of_strings_case_and_order_insensitive(self) -> None:
+        ok, _ = v_json({"members": ["Ro Aldis", "Petal Vun", "Sena Marn"]})(
+            '{"members": ["sena marn", "RO ALDIS", " petal vun "]}'
+        )
+        assert ok
+
+    def test_array_wrong_length_fails(self) -> None:
+        ok, _ = v_json({"members": ["Ro Aldis", "Petal Vun", "Sena Marn"]})('{"members": ["Ro Aldis", "Petal Vun"]}')
+        assert not ok
+
+    def test_array_different_member_fails(self) -> None:
+        ok, _ = v_json({"members": ["Ro Aldis", "Petal Vun"]})('{"members": ["Ro Aldis", "Dana Ott"]}')
+        assert not ok
+
+    def test_array_not_a_list_fails(self) -> None:
+        ok, _ = v_json({"members": ["Ro Aldis"]})('{"members": "Ro Aldis"}')
         assert not ok
 
 

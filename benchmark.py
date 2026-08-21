@@ -108,35 +108,11 @@ MODELS: list[ModelConfig] = [
     ),
 ]
 
-# Dated challengers remain outside the default routine so a normal benchmark does not
-# silently grow. Use --include-challengers for the routine plus current challengers,
+# Recheck after a broken 2026-08-18 run: Qwen thinking never produced a token
+# (HTTPError, body not recorded), and Nemotron's fails were 300s request timeouts
+# on thinking, not wrong answers. Sampling matches the official cards. Use
 # --full-sweep to add North Mini Code, or --model to select one config directly.
 CHALLENGERS: list[ModelConfig] = [
-    ModelConfig(
-        name="lfm2.5-2.6b-Q8_0",
-        hf="LiquidAI/LFM2.5-2.6B-GGUF:LFM2.5-2.6B-Q8_0.gguf",
-        temperature=0.1,
-        top_p=1.0,
-        top_k=50,
-        repetition_penalty=1.1,
-        thinking=False,
-    ),
-    ModelConfig(
-        name="nanbeige4.2-3b-Q8_0-think",
-        hf="mradermacher/Nanbeige4.2-3B-GGUF:Nanbeige4.2-3B.Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-    ),
-    ModelConfig(
-        name="nanbeige4.2-3b-Q8_0-nothink",
-        hf="mradermacher/Nanbeige4.2-3B-GGUF:Nanbeige4.2-3B.Q8_0.gguf",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
-        thinking=False,
-    ),
     ModelConfig(
         name="qwen3.8-27b-Q4_K_M-think",
         hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
@@ -170,14 +146,6 @@ CHALLENGERS: list[ModelConfig] = [
         top_p=0.95,
         top_k=0,
         server_args=("--spec-type", "draft-mtp"),
-    ),
-    ModelConfig(
-        name="muse-glimmer-30b-high-Q4_K_XL",
-        hf="unsloth/Muse-Glimmer-30B-GGUF:Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
-        temperature=1.0,
-        top_p=0.95,
-        top_k=64,
-        reasoning_strength="high",
     ),
 ]
 
@@ -214,6 +182,10 @@ class Prompt:
     category: str
     messages: list[dict[str, object]]
     verify: Verifier
+    # Optional per-prompt generation cap, lower than the mode default (16384 think /
+    # 4096 direct). Long-context prompts set it so a ~3k-token article plus the answer
+    # fits the smallest server context in the fleet (North Mini Code at -c 8192).
+    max_completion_tokens: int | None = None
 
 
 # ---- verifier helpers --------------------------------------------------------
@@ -353,7 +325,9 @@ def v_json(expected: dict[str, object]) -> Verifier:
 
     Tolerates a ```json``` fence or surrounding prose: the span from the first '{'
     to the last '}' is parsed. Numbers compare by value (34 == "34" == 34.0);
-    strings compare case-insensitively after stripping. Tests structured-output /
+    strings compare case-insensitively after stripping; lists of strings compare
+    as case-insensitive, order-insensitive sets of the same length (a members list
+    reported in a different order is not a wrong answer). Tests structured-output /
     instruction-following, the strength of agentic / function-calling models.
     """
 
@@ -387,6 +361,17 @@ def v_json(expected: dict[str, object]) -> Verifier:
             elif isinstance(want, str):
                 if str(got).strip().lower() != want.strip().lower():
                     return False, f"{key}={got!r}, want {want!r}"
+            elif isinstance(want, list):
+                if not isinstance(got, list):
+                    return False, f"{key}={got!r}, want {want!r}"
+                want_list = cast("list[object]", want)
+                got_list = cast("list[object]", got)
+                if len(got_list) != len(want_list):
+                    return False, f"{key}={got!r}, want {want!r}"
+                norm_got = sorted(str(item).strip().lower() for item in got_list)
+                norm_want = sorted(str(item).strip().lower() for item in want_list)
+                if norm_got != norm_want:
+                    return False, f"{key}={got!r}, want {want!r}"
             elif got != want:
                 return False, f"{key}={got!r}, want {want!r}"
         return True, ""
@@ -398,14 +383,210 @@ def _user(text: str) -> list[dict[str, object]]:
     return [{"role": "user", "content": text}]
 
 
+# ---------------------------------------------------------------------------
+# Long-context scenario material
+# ---------------------------------------------------------------------------
+
+# One fictional encyclopedia article, ~2.5-3k tokens, hand-written so every fact
+# cross-checks (dates, counts, and honours are internally consistent). The two
+# variants are byte-identical except for the Legacy birth year: 1887 matches the
+# lead and Early life sections; 1891 is the single planted contradiction. Fictional
+# entities keep world knowledge out of the answer: only the given text can decide.
+# Length is bounded (tests pin 9000-14000 chars) so article + capped answer fits the
+# smallest server context in the fleet (North Mini Code at -c 8192).
+# Wrapped to keep lint happy; _reflow rejoins the lines so the prompt text is
+# single-line prose paragraphs regardless of source formatting.
+_FERREL_TEMPLATE_RAW = """Augustin Ferrel
+
+Augustin Ferrel (3 March 1887 - 21 June 1961) was a Veranian composer, conductor, and music teacher.
+He wrote five operas, four symphonies, seven string quartets, and more than sixty songs, and taught
+composition at the Halmer Conservatory from 1920 to 1952. His music joins late romantic melody to an
+austere northern harmonic idiom that critics of the 1930s labelled "coastal modernism", a tag Ferrel
+pretended to dislike.
+
+== Early life ==
+
+Augustin Ferrel was born on 3 March 1887 in Kolvik, a fishing port on Verania's northern coast, the
+third of four children of Edvard Ferrel, the town's Lutheran organist, and his wife Linnea, nee
+Hallas, who taught piano to the children of skippers and cannery clerks. The family flat stood above
+the music shop run by his paternal uncle, and Ferrel liked to say that the shop's crates of
+scratched second-hand records had been his first library.
+
+He began piano lessons with his mother at six and was composing small piano pieces by eleven,
+several of which were played at the Kolvik parish hall. In 1898 the family moved to Halmer, the
+capital, after his father took the organist's post at the Ostmars Church. At the Halmer Gymnasium a
+mathematics teacher, Gunnar Sede, fed the boy's growing obsession with counterpoint, telling him
+that a fugue was simply a proof set in sound.
+
+Ferrel dismissed almost all of his juvenilia in later life. The one exception was a wedding song for
+his sister, "The Tide Clock", written in 1903, which he kept in his concert programmes to the end.
+
+== Education ==
+
+Ferrel entered the Halmer Conservatory in 1905, studying piano with Klara Menn and composition with
+Ernst Valling, whose punishing exercises in modal counterpoint Ferrel credited, decades later, as
+the spine of his technique. He paid his way by playing rehearsals at a suburban theatre and, from
+1907, as the regular accompanist of the Halmer Choral Society.
+
+He graduated in 1909 with the composition diploma. His graduation piece, "Night on the Outer Pier",
+was conducted by Valling at the conservatory's summer concert and was published the following year
+as his official opus 1. A small scholarship paid for a summer in Brenau in 1910, where the repertory
+of the northern opera houses made a deeper impression on him than any of his formal lessons.
+Valling's seminar on paleo-Veranian organum, which Ferrel sat in on without credit for two winters,
+later surfaced whole in the modal writing of the Second Symphony.
+
+== Career ==
+
+Ferrel's professional career began in 1912 with the post of second kapellmeister at the Brenau
+Stadttheater. Seven seasons in the pit gave his music an unsentimental, practical command of voices
+and orchestra. He conducted operetta through the war years on shrinking budgets, and the theatre's
+director, Otto Kelb, staged Ferrel's one-act comedy "The Lighthouse Ledger" in 1917 as a fill-in for
+a cancelled visiting production.
+
+In 1920 Ferrel returned to Halmer as professor of composition at the conservatory. Teaching claimed
+the afternoons, so the sequence of major works that followed was composed, almost without exception,
+before lunch, a habit he recommended to every student he ever had. He served as rector for the
+academic year 1936-1937, steering the conservatory through a ministry review of modernist syllabuses
+with what his biographer called "the most Ferrel of all his performances".
+
+Guest engagements kept him on the road through the late 1920s and 1930s. He preferred conducting his
+own music to administering it, and turned down the music-directorship of the Brenau Stadttheater in
+1929, telling the intendant that he had already given the pit its orders for seven years. A 1931
+broadcast concert with the Brenau Philharmonic, pairing the Second Symphony with the Net Menders
+intermezzo, was issued on shellac and is the earliest recorded document of his conducting.
+
+Ferrel retired from teaching in 1952 and kept composing until 1958, when his sight began to fail.
+His last years went into preparing a complete critical edition of his songs. He died at home in
+Halmer on 21 June 1961.
+
+== Operas ==
+
+Ferrel completed five operas.
+
+The Salt Garden, a fishing-village tragedy in three acts to a libretto by Ade Ronn, was first
+performed at the Brenau Stadttheater on 14 October 1928. Its story of a family that hides a
+shipwreck survivor's identity for a generation made it the most performed Veranian opera of its
+decade, and the intermezzo, "The Net Menders", took on an independent life in concert programmes.
+
+The Winter Lock (first performed 1933) compresses a canal accident into a single winter night.
+Ferrel and Ronn cut the libretto to under ninety minutes of music at the composer's insistence, and
+the score's stark choral writing for the lock-keepers' wives is often singled out as the purest
+example of his coastal idiom.
+
+North of Halmen (1940) is a radio opera commissioned by the Veranian Broadcasting Service. Written
+for microphones rather than a stage, its broadcast reached the largest audience any Ferrel work
+would have in his lifetime, and the composer, who listened at home, described the experience as
+"hearing my own house on the sea".
+
+The Cartographer's Daughter (1949) returned to the theatre as a full-evening lyric drama. Its long
+opening scene for soprano and chorus, set in a survey office during a storm, closes on a tonic pedal
+more than twenty minutes in, a passage conductors either revere or quietly cut.
+
+The Lantern Procession (1955), the warmest and least typical of the five, is a comedy of village
+misunderstandings written after the deaths of both Ronn and Menn. Critics heard a farewell in its
+final procession; Ferrel, typically, denied any such intention.
+
+== Symphonies ==
+
+Ferrel's four symphonies anchor the orchestral catalogue. The First (1915) is still broadly romantic
+and remains the least played. The Second, "Northern" (1921), a half-hour passacaglia-finale work,
+fixed his public reputation at home. The Third (1934) was his most controversial premiere, whistled
+in Halmer and applauded in Brenau in the same month. The Fourth (1948), his most performed concert
+work, ends with a set of variations on a Kolvik herring-counting song that he had first noted down
+as a teenager. He also left a handful of tone poems, of which "The Ice Pilot" (1926) is the most
+played.
+
+== Chamber and piano music ==
+
+The seven string quartets trace Ferrel's whole career with unusual candour. No. 1 (1911) and No. 2
+(1916) still lean on Brahms. No. 3 (1922) introduces the bare parallel fifths that became his
+fingerprint. No. 4 (1927) packs a four-movement scheme into eleven minutes. No. 5 (1935) is a single
+long arch. No. 6 (1943), written for amateurs during the wartime coal shortages, is meant to work in
+a cold hall with tired fingers. No. 7 (1950) reconciles the arch of the Fifth with the brevity of
+the Fourth and is generally ranked with the finest quartets of its decade.
+
+The two piano sonatas (1913 and 1925) are recital staples in Verania, and the "Harbour Notebook"
+(1938), short pieces each named for a boat in the Kolvik fleet, is the set teachers reach for. The
+Violin Sonata (1919) and the Cello Sonata (1932) complete the main chamber list.
+
+== Songs ==
+
+Ferrel published more than sixty songs. Four cycles anchor them: "Sailor's Almanac" (1917), "White
+Fields" (1929), "The Long Shore" (1944), and the final "Late Windows" (1958), his last completed
+work. He insisted the songs be sung in Veranian, and refused commissions for translations in his
+lifetime. Heard chiefly at home for most of his career, the songs began travelling after the late-
+century recordings drew ensembles back to the rest of his catalogue.
+
+== Personal life ==
+
+In 1916 Ferrel married the violinist Dagny Holm, whom he had first accompanied at a conservatory
+exam. Their daughter Liv, later a painter, was born in 1918, and their son Jonas, later the
+conservatory's librarian, in 1921. The marriage was close and, by design, uneventful; colleagues
+joked that the storms in Ferrel's music were all exported. The family spent every summer from 1923
+onward in a house on the Kolvik shore road.
+
+== Honours ==
+
+Ferrel received the Kalmar Prize in 1938, the Grand Medal of the Halmer Music Society in 1946, and
+honorary membership of the Veranian Composers' League in 1951. He twice declined the Order of the
+Coast, informing the ministry that a composer's state honours were his pupils. In 1959 the
+conservatory named its new rehearsal hall after him, an irony he is recorded as enjoying.
+
+== Legacy ==
+
+Ferrel, born in <LEGACY-BIRTH-YEAR> in the port town of Kolvik, belonged to a generation of Veranian
+composers who stayed provincial on purpose, and his reputation has kept their whole milieu in view.
+The Ferrel Chamber Prize was founded in 1969 for young ensembles from the northern provinces. The
+Augustin Ferrel Museum opened in Kolvik in 1983 in the former music shop beneath his childhood flat.
+A festival of his music has been held in Kolvik every second summer since 1974, and the shore-road
+house is marked with a plaque quoting the Tide Clock song. Complete recordings of the quartets
+followed in 1998, and a full opera cycle between 2004 and 2011, which revived his early operas in
+particular on European stages. Ferrel's working maxim, quoted in every study of his music, was that
+a composer's job is to write music that can be played twice by people who are cold."""
+
+
+def _reflow(template: str) -> str:
+    """Join hard-wrapped source lines inside each paragraph."""
+    return "\n\n".join(" ".join(paragraph.split()) for paragraph in template.split("\n\n"))
+
+
+_FERREL_TEMPLATE = _reflow(_FERREL_TEMPLATE_RAW)
+
+
+def _ferrel_article(legacy_birth_year: int) -> str:
+    """Instantiate the article template with the Legacy-section birth year."""
+    return _FERREL_TEMPLATE.replace("<LEGACY-BIRTH-YEAR>", str(legacy_birth_year))
+
+
+# Internally consistent reference (Legacy repeats the lead's 1887).
+FERREL_ARTICLE = _ferrel_article(1887)
+# Same article with exactly one planted contradiction (Legacy says 1891).
+FERREL_ARTICLE_BAD = _ferrel_article(1891)
+
+# Uniform suffix for consistency pairs: judge textually, answer first-token yes/no.
+_CONSISTENCY_SUFFIX = (
+    "\n\nDo these two statements contradict each other? Judge using only the "
+    "information given in the two statements. Answer with one word: yes or no."
+)
+
+# Long-context consistency check, shared by both article variants.
+_LONGCTX_CHECK_PREFIX = "You are checking an encyclopedia article for internal consistency.\n\n"
+_LONGCTX_CHECK_SUFFIX = (
+    "\n\nQuestion: Does this article contain an internal inconsistency, that is, two "
+    "statements that cannot both be true? Answer with one word: yes or no."
+)
+
+
 # Tighter answers + verifiable correctness. Each prompt is sampled DEFAULT_N_RUNS times
 # at temperature > 0; we report passes/N. A 'pass' must contain the right answer,
 # not just plausibly mention it.
 
-# Discriminating, mechanically-verifiable text core across four dimensions: math (3),
-# reasoning (4), coding (3, executed), structured output (2, JSON / strict format).
-# Trivial prompts that every model passed (math_div, math_percent, logic_syllogism_yes,
-# code_total, translate_fr/es) and the brittle substring-matched summarize were dropped.
+# 22 prompts across five dimensions: math (3), reasoning (4), coding (3, executed),
+# structured (3), consistency (6), longcontext (3). The first four are the original
+# discriminating text core; consistency and longcontext model the background
+# data-auditing agent scenario (does a model notice that two wiki statements cannot
+# both be true, over a statement pair or a full article). Trivial prompts that every
+# model passed were dropped from the original 16 (see docs/benchmark-design.md).
 # The structured dimension probes instruction-following and function-calling behavior.
 # No LLM judge: every prompt verifies by number / yes-no / regex / executed code / parsed JSON.
 PROMPTS: list[Prompt] = [
@@ -549,6 +730,127 @@ PROMPTS: list[Prompt] = [
         # Strict format: the stripped answer must be exactly "2, 3, 5, 7, 11" (spacing flexible,
         # optional trailing period). Leading prose fails -- that is the instruction-following test.
         verify=v_regex(r"^\s*2\s*,\s*3\s*,\s*5\s*,\s*7\s*,\s*11\s*\.?\s*$"),
+    ),
+    Prompt(
+        name="json_fields",
+        category="structured",
+        messages=_user(
+            "From the text below, extract a JSON object with exactly the keys "
+            '"artist" (string), "formed" (integer), "members" (array of strings, one per '
+            'member), and "award_winner" (boolean): '
+            "'Night Harbor was formed in 1993 by singer Ro Aldis, guitarist Petal Vun, "
+            "and drummer Sena Marn. The trio still performs, and it has never won a major "
+            "award.' Reply with only the JSON object."
+        ),
+        # The never-won trap checks a false boolean and a list value in one object --
+        # the report shape a background auditing agent emits per finding.
+        verify=v_json(
+            {
+                "artist": "Night Harbor",
+                "formed": 1993,
+                "members": ["Ro Aldis", "Petal Vun", "Sena Marn"],
+                "award_winner": False,
+            }
+        ),
+    ),
+    # ---- consistency (statement pairs, wiki-edit patterns, fictional entities) ----
+    # Real wiki inconsistency patterns on invented entities, so world knowledge cannot
+    # substitute for reading the two statements. Half contradict, half do not, so an
+    # always-yes or always-no bias scores 50%.
+    Prompt(
+        name="cons_date_shift",
+        category="consistency",
+        messages=_user(
+            "Statement A: Elsa Marquard (1902-1988) was a German lithographer and printmaker.\n"
+            "Statement B: Marquand died in 1986, shortly before a major retrospective of "
+            "her work opened." + _CONSISTENCY_SUFFIX
+        ),
+        # Infobox range end (1988) vs prose death year (1986) -- classic date drift.
+        verify=v_yes_no(want_yes=True),
+    ),
+    Prompt(
+        name="cons_digit_swap",
+        category="consistency",
+        messages=_user(
+            "Statement A: Lake Vess covers an area of 62 square kilometers.\n"
+            "Statement B: With an area of 26 square kilometers, Lake Vess is the largest "
+            "lake in the region." + _CONSISTENCY_SUFFIX
+        ),
+        # 62 vs 26: transposed digits, the most common wiki numeric typo.
+        verify=v_yes_no(want_yes=True),
+    ),
+    Prompt(
+        name="cons_dead_action",
+        category="consistency",
+        messages=_user(
+            "Statement A: The composer Anton Rebek retired in 1930 and died in 1932 in Torlan.\n"
+            "Statement B: In 1935 Rebek completed and conducted the premiere of his seventh "
+            "symphony." + _CONSISTENCY_SUFFIX
+        ),
+        # An action after the stated death year requires temporal reasoning, not string match.
+        verify=v_yes_no(want_yes=True),
+    ),
+    Prompt(
+        name="cons_unit_equivalent",
+        category="consistency",
+        messages=_user(
+            "Statement A: The Sorvik radio tower is 450 meters tall.\n"
+            "Statement B: The Sorvik radio tower reaches a height of 0.45 kilometers." + _CONSISTENCY_SUFFIX
+        ),
+        # Equal value in different units: no contradiction. Catches unit-blind matchers.
+        verify=v_yes_no(want_yes=False),
+    ),
+    Prompt(
+        name="cons_complementary",
+        category="consistency",
+        messages=_user(
+            "Statement A: The novel The Glass Ferry was published in 1977.\n"
+            "Statement B: The Glass Ferry won the Vendla Prize in 1979." + _CONSISTENCY_SUFFIX
+        ),
+        # Publication and a later prize are complementary facts, not a contradiction.
+        verify=v_yes_no(want_yes=False),
+    ),
+    Prompt(
+        name="cons_relative_rank",
+        category="consistency",
+        messages=_user(
+            "Statement A: Mount Kerrek is the second-highest mountain in Tarvonia.\n"
+            "Statement B: No mountain in Tarvonia is higher than Mount Sarva." + _CONSISTENCY_SUFFIX
+        ),
+        # Sarva highest + Kerrek second-highest is consistent; requires relational reasoning.
+        verify=v_yes_no(want_yes=False),
+    ),
+    # ---- longcontext (article-length input, the background agent's working unit) ----
+    Prompt(
+        name="longctx_inconsistent",
+        category="longcontext",
+        messages=_user(_LONGCTX_CHECK_PREFIX + FERREL_ARTICLE_BAD + _LONGCTX_CHECK_SUFFIX),
+        # The planted birth-year contradiction (lead/Early life 1887 vs Legacy 1891) sits
+        # thousands of tokens apart; finding it is the wiki-audit task at article scale.
+        verify=v_yes_no(want_yes=True),
+        max_completion_tokens=4096,
+    ),
+    Prompt(
+        name="longctx_consistent",
+        category="longcontext",
+        messages=_user(_LONGCTX_CHECK_PREFIX + FERREL_ARTICLE + _LONGCTX_CHECK_SUFFIX),
+        # Same length and shape, no contradiction: measures the false-positive rate,
+        # which for an unattended agent is as damaging as a miss.
+        verify=v_yes_no(want_yes=False),
+        max_completion_tokens=4096,
+    ),
+    Prompt(
+        name="longctx_needle",
+        category="longcontext",
+        messages=_user(
+            "Read the encyclopedia article below, then answer the question.\n\n"
+            + FERREL_ARTICLE
+            + "\n\nQuestion: In which year was the opera The Salt Garden first performed? "
+            "Reply with only the number."
+        ),
+        # One dated fact buried mid-list among distractor years; stated exactly once.
+        verify=v_number(1928),
+        max_completion_tokens=4096,
     ),
 ]
 
@@ -818,16 +1120,27 @@ def _stop_server(proc: subprocess.Popen[bytes]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, *, thinking: bool) -> tuple[str, int]:
+def _chat(
+    messages: list[dict[str, object]],
+    model_cfg: ModelConfig,
+    port: int,
+    *,
+    thinking: bool,
+    max_tokens_cap: int | None = None,
+) -> tuple[str, int]:
     """Send a chat completion request. Returns (response_text, token_count).
 
     `thinking` is the effective per-request decision (see `_thinks` for the per-category
-    gate), not necessarily `model_cfg.thinking`.
+    gate), not necessarily `model_cfg.thinking`. `max_tokens_cap` optionally lowers the
+    mode default so a long prompt plus its answer fits the server context.
     """
     api_url = API_URL.format(port=port)
-    # Thinking mode needs more headroom than direct answers. 16k covers these short
-    # benchmark prompts without truncation.
+    # Thinking mode needs more headroom than direct answers. 16k covers the short
+    # benchmark prompts without truncation. Long-context prompts cap below the mode
+    # default so a ~3k-token article + answer fits the smallest fleet context (8192).
     max_tokens = 16384 if thinking else 4096
+    if max_tokens_cap is not None:
+        max_tokens = min(max_tokens, max_tokens_cap)
     template_kwargs: dict[str, object] = {"enable_thinking": thinking}
     if model_cfg.reasoning_strength is not None:
         template_kwargs["reasoning_strength"] = model_cfg.reasoning_strength if thinking else "low"
@@ -882,9 +1195,11 @@ def _chat(messages: list[dict[str, object]], model_cfg: ModelConfig, port: int, 
 
 # Thinking only helps on multi-step work; on short-answer categories it loops and burns
 # the request timeout for no accuracy gain. A -think config thinks ONLY on these
-# categories; everything else runs direct. The `structured` category is deliberately
-# excluded -- thinking on JSON/strict-format tasks wastes tokens and can break the format.
-THINKING_CATEGORIES: frozenset[str] = frozenset({"math", "reasoning", "coding"})
+# categories; everything else runs direct. `consistency` and `longcontext` join the gate:
+# contradiction-finding is reasoning, and a background agent is latency-insensitive.
+# The `structured` category stays deliberately excluded -- thinking on JSON/strict-format
+# tasks wastes tokens and can break the format.
+THINKING_CATEGORIES: frozenset[str] = frozenset({"math", "reasoning", "coding", "consistency", "longcontext"})
 
 
 def _thinks(model_cfg: ModelConfig, prompt: Prompt) -> bool:
@@ -893,19 +1208,42 @@ def _thinks(model_cfg: ModelConfig, prompt: Prompt) -> bool:
     return model_cfg.thinking and prompt.category in THINKING_CATEGORIES
 
 
+def _api_fail_reason(exc: BaseException) -> str:
+    """Keep HTTP status and body so a 400 is not stored as a bare HTTPError."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+        detail = body[:500] if body else str(exc.reason or "")
+        return f"api error: HTTPError {exc.code} {detail}".rstrip()
+    name = type(exc).__name__
+    msg = str(exc).strip()
+    if not msg or msg == name:
+        return f"api error: {name}"
+    return f"api error: {name}: {msg}"
+
+
 def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attempt:
     start = time.monotonic()
     try:
-        text, tokens = _chat(prompt.messages, model_cfg, port, thinking=_thinks(model_cfg, prompt))
+        text, tokens = _chat(
+            prompt.messages,
+            model_cfg,
+            port,
+            thinking=_thinks(model_cfg, prompt),
+            max_tokens_cap=prompt.max_completion_tokens,
+        )
     except Exception as e:
         elapsed = time.monotonic() - start
-        log.warning("    api error on %s/%s: %s", model_cfg.name, prompt.name, e)
+        reason = _api_fail_reason(e)
+        log.warning("    api error on %s/%s: %s", model_cfg.name, prompt.name, reason)
         return Attempt(
             tokens=0,
             time_s=round(elapsed, 2),
             response="",
             ok=False,
-            fail_reason=f"api error: {type(e).__name__}",
+            fail_reason=reason,
         )
     elapsed = time.monotonic() - start
     ok, reason = prompt.verify(text)
@@ -929,11 +1267,21 @@ def run_benchmark(
     port: int = DEFAULT_PORT,
     n: int = DEFAULT_N_RUNS,
     *,
+    prompts: list[Prompt] | None = None,
     save_aggregate_progress: bool = True,
+    snapshot_tag: str | None = None,
 ) -> list[ModelResult]:
-    """Run all prompts against the selected models. Each prompt is sampled `n` times."""
+    """Run the prompt suite against the selected models, sampling each prompt `n` times.
+
+    `prompts` defaults to the full suite; a filtered subset (see `--category`) must pass
+    `snapshot_tag` so per-model snapshots land in a distinct file instead of overwriting
+    the full-suite snapshot. `save_aggregate_progress` must stay off for filtered runs --
+    a partial prompt set must never replace the canonical benchmark.json/RESULTS.md.
+    """
     if models is None:
         models = MODELS
+    if prompts is None:
+        prompts = PROMPTS
     results: list[ModelResult] = []
 
     for model in models:
@@ -950,7 +1298,7 @@ def run_benchmark(
             continue
         try:
             mr = ModelResult(model_name=model.name, hf_id=model.hf)
-            for prompt in PROMPTS:
+            for prompt in prompts:
                 pr = _run_prompt(prompt, model, port, n)
                 mr.prompts.append(pr)
             results.append(mr)
@@ -959,7 +1307,8 @@ def run_benchmark(
             if save_aggregate_progress:
                 _save_json(results)
                 _save_markdown(results)
-            per_model_path = RESULTS_DIR / f"benchmark.{model.name}.json"
+            suffix = f".{snapshot_tag}" if snapshot_tag else ""
+            per_model_path = RESULTS_DIR / f"benchmark.{model.name}{suffix}.json"
             per_model_data: BenchmarkData = {
                 "timestamp": datetime.now(tz=UTC).isoformat(),
                 "models": [_model_to_dict(mr)],
@@ -1124,6 +1473,20 @@ def _save_markdown(results: list[ModelResult]) -> Path:
     return path
 
 
+def _filter_prompts(prompts: list[Prompt], categories: Iterable[str]) -> list[Prompt]:
+    """Select prompts whose category is in `categories` (case-insensitive).
+
+    Raises ValueError on an unknown category so a typo cannot silently select an
+    empty or wrong subset -- that filtered run would otherwise look like results.
+    """
+    wanted = {category.strip().lower() for category in categories}
+    unknown = wanted - {prompt.category for prompt in prompts}
+    if unknown:
+        msg = f"unknown categories: {', '.join(sorted(unknown))}"
+        raise ValueError(msg)
+    return [prompt for prompt in prompts if prompt.category in wanted]
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark small LLMs on Apple Silicon")
     parser.add_argument(
@@ -1137,6 +1500,13 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Run any matching supported text configs (substring match)",
+    )
+    parser.add_argument(
+        "--category",
+        type=str,
+        default=None,
+        help="Comma-separated prompt categories to run (e.g. structured,consistency); "
+        "filtered runs save tagged per-model snapshots and never publish canonical results",
     )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(
@@ -1191,6 +1561,17 @@ def main() -> None:
     if not models:
         log.error("No model matching '%s' found", args.model)
         return
+    try:
+        selected_prompts = _filter_prompts(PROMPTS, args.category.split(",")) if args.category else PROMPTS
+    except ValueError as e:
+        log.error("%s", e)
+        raise SystemExit(2) from e
+    # A run over the complete prompt set may publish canonical results; a filtered
+    # run writes tagged snapshots only, whatever its scope flags are.
+    complete_prompt_set = len(selected_prompts) == len(PROMPTS)
+    snapshot_tag = None
+    if not complete_prompt_set:
+        snapshot_tag = "-".join(sorted({prompt.category for prompt in selected_prompts}))
     missing = _missing_model_assets(models, require_weights=args.full_sweep)
     if missing:
         scope = "Full sweep" if args.full_sweep else "Selected models"
@@ -1203,7 +1584,9 @@ def main() -> None:
         models,
         port=args.port,
         n=args.n_runs,
-        save_aggregate_progress=not args.full_sweep,
+        prompts=selected_prompts,
+        save_aggregate_progress=not args.full_sweep and complete_prompt_set,
+        snapshot_tag=snapshot_tag,
     )
     if not results:
         log.error("No models completed; canonical results unchanged")
@@ -1215,8 +1598,6 @@ def main() -> None:
             len(models),
         )
         raise SystemExit(3)
-    _save_json(results)
-    _save_markdown(results)
 
     for r in results:
         log.info(
@@ -1227,6 +1608,14 @@ def main() -> None:
             r.total_time_s,
             r.gen_tok_per_s,
         )
+    if snapshot_tag is not None:
+        log.info(
+            "Category-filtered run (%s): tagged per-model snapshots only; canonical results unchanged",
+            snapshot_tag,
+        )
+        return
+    _save_json(results)
+    _save_markdown(results)
 
 
 if __name__ == "__main__":

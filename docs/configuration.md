@@ -5,16 +5,19 @@ ever measured. A regression test pins its literal names so a broad experimental 
 cannot silently become the default again. Historical results and the retirement policy
 are documented in the README.
 
-`CHALLENGERS` contains the current non-default text configs. `--include-challengers`
-runs `MODELS + CHALLENGERS`, while `AGENTIC_TEXT_MODELS` contains North Mini Code.
-`--full-sweep` runs all 14 current text configurations, and an explicit `--model` filter
+`CHALLENGERS` is Qwen3.8-27B (think and direct) and Nemotron 3.5 Lightning.
+The 2026-08-18 agent-scenario snapshots are not quality verdicts: Qwen thinking
+recorded a bare `HTTPError` with no response body, and Nemotron's fails were
+300-second request timeouts on thinking prompts. `--include-challengers` runs
+`MODELS + CHALLENGERS`. `AGENTIC_TEXT_MODELS` contains North Mini Code.
+`--full-sweep` runs all 10 current text configurations, and an explicit `--model` filter
 searches those collections. Historical dominated models are intentionally not selectable.
 Fara remains outside them because its evaluation requires screenshots and browser actions.
 
 Each `ModelConfig` defines:
 
 - `revision`, an optional immutable Hugging Face commit used to resolve the exact
-  cached artifact. Qwen3.8-27B is pinned to `fdd03b8bbd279c1694563650e79d85a2373d9934`.
+  cached artifact.
 - `temperature`, `top_p`, and `top_k`, verified against the model's official card.
 - `presence_penalty` and `repetition_penalty`, defaulting to no-ops.
   `repetition_penalty` is sent to llama.cpp as `repeat_penalty`; LFM2.5 uses its
@@ -72,46 +75,27 @@ neutral value used by the benchmark instead of silently inheriting project defau
 ## Full-sweep presets
 
 The benchmark caps generated output at 16,384 tokens for thinking requests and 4,096
-for direct requests. Those are suite limits, not claims about each model's maximum.
+for direct requests, with one exception: the long-context prompts set a per-prompt
+4,096-token cap in both modes (`Prompt.max_completion_tokens`), so a ~2.5k-token
+article plus its answer fits the smallest server context in the fleet (North Mini
+Code at `-c 8192`). Those are suite limits, not claims about each model's maximum.
 All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0` and
 `1`. A neutral `top_p=1` or `top_k=0` means that sampler is disabled.
 
 | Model family | Suite sampling | Thinking and scenarios | Context / official output guidance | Primary source |
 |---|---|---|---|---|
-| Gemma 4 E2B and 26B-A4B | `temp=1`, `top_p=.95`, `top_k=64` | Separate think/direct configs; thinking only for reasoning, math, and code | 131K context; official examples use 512-1,024 output tokens, not a stated maximum | [official Gemma 4 card](https://huggingface.co/google/gemma-4-e2b-it) |
+| Gemma 4 E2B and 26B-A4B | `temp=1`, `top_p=.95`, `top_k=64` | Separate think/direct configs; thinking for math, reasoning, coding, consistency, and longcontext | 131K context; official examples use 512-1,024 output tokens, not a stated maximum | [official Gemma 4 card](https://huggingface.co/google/gemma-4-e2b-it) |
 | LFM2.5-8B-A1B | `.2/1/80`, repetition `1.05` | No thinking toggle; general chat and tool use share the native template | 128K context; official example uses 8,192 output tokens, not a stated maximum | [official card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
 | Mellum2-12B-A2.5B | `.6/.95/20` | Native thinking, no direct toggle; intended for coding and reasoning | 131K context; official usage example allows 81,920 output tokens | [official card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
-| Qwen3.8-27B | Think `1/.95/20`; direct `.7/.8/20`, presence `1.5` | Separate think/direct configs; think mode uses `xhigh` effort, while direct prompts disable thinking | 262K native context, extensible to 1M; the suite retains its own 16K/4K output caps | [official card](https://huggingface.co/Qwen/Qwen3.8-27B) |
-| Nemotron 3.5 Lightning 30B-A3B | `1/.95/0` | `enable_thinking` follows the suite category gate; agentic model with embedded MTP | Up to 1M context; the suite uses 16K and does not claim local 1M feasibility | [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
-| Muse Glimmer 30B | `1/.95/64` | `high` reasoning for math, reasoning, and code; `low` for direct prompts | 131K+ context; the suite retains its own 16K/4K output caps | [official card](https://huggingface.co/meta-models/Muse-Glimmer-30B) |
+| Qwen3.8-27B | Think `1/.95/20`; direct `.7/.8/20`, presence `1.5` | Separate think/direct configs; think mode uses `xhigh` effort | 262K native context; official thinking output guidance is 262,144 tokens, the suite keeps 16K/4K caps | [official card](https://huggingface.co/Qwen/Qwen3.8-27B) |
+| Nemotron 3.5 Lightning 30B-A3B | `1/.95/0` | `enable_thinking` follows the suite category gate; embedded MTP | Up to 1M context; the suite uses 16K and does not claim local 1M feasibility | [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
 | North Mini Code 1.0 | `1/.95/0` | Interleaved thinking should remain enabled and carried between agent turns; JSON-schema tools | 256K context, 64K maximum output; official simple generation example uses 1,024 | [official card](https://huggingface.co/CohereLabs/North-Mini-Code-1.0) |
 
-LFM2.5-2.6B and Nanbeige4.2-3B are specified below because they were researched as
-challengers. Fara1.5-4B is also below, but it is rerun separately from the text sweep.
-
-Qwen3.8-27B uses Unsloth's 17.1 GB `Q4_K_M` GGUF at immutable repository revision
-`fdd03b8bbd279c1694563650e79d85a2373d9934` for the text-only suite. The optional
-roughly 0.93 GB vision projector is intentionally omitted. The official card recommends
-thinking sampling `temperature=1`, `top_p=.95`, `top_k=20`, neutral penalties, and
-`reasoning_effort=xhigh`; direct mode uses `.7/.8/20` with presence penalty `1.5`.
-The think config applies the direct sampler whenever the category gate disables thinking,
-so strict-format prompts do not accidentally use the reasoning sampler. The preset and
-immutable cache target are prepared, but model loading and inference remain unverified
-until the benchmark is explicitly authorized.
-
-Muse Glimmer uses Unsloth's 15.9 GB `UD-Q4_K_XL` GGUF plus the 1.6 GB quantized
-DFlash drafter. The harness auto-attaches the drafter with a 15-token draft window;
-the optional perception encoder is omitted because this suite is text-only. The model
-card recommends `high` or `xhigh` for complex problem solving, coding, and agentic
-tasks. The benchmark uses `high` for its thinking categories and `low` for short direct
-and strict-format prompts so the requested effort is explicit on every call.
-
-Nemotron uses Bartowski's 19.82 GB `Q3_K_M` GGUF. The usual `Q4_K_M` is 25.48 GB,
-which exceeds this Mac's 24.96 GB Metal working-set ceiling before KV cache and compute
-buffers. This makes the local result a deliberately memory-safe but more aggressively
-quantized comparison. The current GGUF embeds its MTP layers, so the harness enables
-`draft-mtp` without downloading a separate draft file. NVIDIA specifies
-`temperature=1`, `top_p=.95`, and no `top_k`; the benchmark uses neutral `top_k=0`.
+Retired challenger presets (LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer) are specified
+below so a future rerun does not rediscover them. Qwen3.8-27B and Nemotron stay in
+`CHALLENGERS` until a rerun with recorded HTTP bodies and a timeout that can finish
+the 4,096-token long-context cap. Fara1.5-4B is also below, but it is rerun separately
+from the text sweep.
 
 ## Researched challenger presets
 
@@ -132,8 +116,9 @@ local verdicts are retained so a future rerun does not have to rediscover them.
   the benchmark's `thinking=False` therefore requests no extra control and leaves the
   native template behavior unchanged.
 - Source: [official model card](https://huggingface.co/LiquidAI/LFM2.5-2.6B).
-- Local Q8_0 verdict: accurate but too verbose and slow to add a useful routine Pareto
-  point. Exact dated measurements live in the [generated comparison](../results/COMPARISON.md).
+- Local Q8_0 verdict: accurate on the agent-scenario suite but dominated by Gemma 4
+  E2B thinking (same or better accuracy, much less wall time). The card also
+  discourages knowledge-heavy workloads. Retired from reruns.
 
 ### Nanbeige4.2-3B
 
@@ -149,9 +134,61 @@ local verdicts are retained so a future rerun does not have to rediscover them.
 - Sources: [official model card](https://huggingface.co/Nanbeige/Nanbeige4.2-3B),
   [generation config](https://huggingface.co/Nanbeige/Nanbeige4.2-3B/blob/main/generation_config.json),
   and upstream [llama.cpp PR #25994](https://github.com/ggml-org/llama.cpp/pull/25994).
-- Local Q8_0 verdict: thinking is accurate but impractically slow, while direct mode
-  loses too much accuracy. Keep for agentic evaluation only; exact dated measurements
-  live in the [generated comparison](../results/COMPARISON.md).
+- Local Q8_0 verdict: thinking timed out on the agent-scenario long-context and
+  consistency prompts; direct mode missed most contradiction pairs. Retired from
+  reruns, including the agentic track.
+
+### Qwen3.8-27B
+
+- Official thinking sampling: `temperature=1`, `top_p=.95`, `top_k=20`,
+  `reasoning_effort=xhigh`. Direct mode: `.7/.8/20` with presence penalty `1.5`.
+  The think config applied the direct sampler on non-thinking categories.
+- Text-only Unsloth `Q4_K_M` (17.1 GB) at revision
+  `fdd03b8bbd279c1694563650e79d85a2373d9934`; vision projector omitted.
+- Source: [official card](https://huggingface.co/Qwen/Qwen3.8-27B).
+- Official `reasoning_effort` levels are `xhigh` (default), `medium`, and `low`.
+  The suite sends `xhigh` as a top-level request field for thinking prompts.
+- 2026-08-18 snapshot is not a quality verdict. Thinking: 0/66, first request
+  58s then `api error: HTTPError`, later requests 0.01-0.11s, no response body
+  stored. Direct: 53/66 real wrong answers, 1.8 tok/s. Recheck with HTTP body
+  logging before judging the model.
+
+### Nemotron 3.5 Lightning 30B-A3B
+
+- Official sampling: `temperature=1`, `top_p=.95`, no `top_k` (suite used `top_k=0`).
+- Local GGUF was Bartowski `Q3_K_M` (19.82 GB) because `Q4_K_M` is 25.48 GB and
+  exceeds the 24.96 GB Metal working-set ceiling. MTP is embedded.
+- Source: [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16).
+- 2026-08-18 snapshot is not a quality verdict. 59/66, and every fail was a
+  300-second `TimeoutError` on thinking prompts. At 5.4 tok/s the 4,096-token
+  long-context cap needs ~760s, so `REQUEST_TIMEOUT=300` stops the request before
+  an answer. Recheck with a timeout that can finish the cap, still on `Q3_K_M`.
+
+### Muse Glimmer 30B
+
+- Official sampling: `temp=1`, `top_p=.95`, `top_k=64`. Named reasoning strength
+  `high` for thinking categories and `low` for direct prompts. Unsloth `UD-Q4_K_XL`
+  plus `dflash-kquant.gguf`.
+- Source: [official card](https://huggingface.co/meta-models/Muse-Glimmer-30B).
+- Local verdict: ceiling on the 12-prompt core at several times the Gemma 26B
+  think wall time. The 22-prompt rerun never finished. Retired from text reruns.
+
+### Ling-3.0-tiny
+
+- Official sampling: `temperature=1.0`, `top_p=0.95`, `top_k=20`. Thinking is on
+  by default; disable with `chat_template_kwargs.enable_thinking=false`. Context
+  262,144. No `min_p`, presence penalty, or repetition penalty on the card; the
+  suite would use neutrals `0` / `0` / `1`.
+- 7.9B total, 1.3B active hybrid-linear MoE. Community Q8_0 GGUF is 8.41 GB at
+  `bloomer010/Ling-3.0-tiny-GGUF` revision `76d03bfc93a2b0ec84aac5f187cdf3793541e2a7`.
+  There is no official GGUF.
+- Sources: [official card](https://huggingface.co/inclusionAI/Ling-3.0-tiny) and
+  llama.cpp [PR #26608](https://github.com/ggml-org/llama.cpp/pull/26608) (BailingMoE3,
+  merged 2026-08-17).
+- Local smoke, 2026-08-20: llama.cpp build 10544 loaded the Q8_0 at `-c 2048` and
+  returned `pong` with thinking off. `/opt/homebrew/bin/llama-server` is still
+  `llama-cpp-bundled` 10380, which predates that merge and cannot load the
+  architecture. Do not add to `CHALLENGERS` until the project binary includes it.
 
 ### Fara1.5-4B
 
