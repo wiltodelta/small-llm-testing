@@ -61,10 +61,29 @@ pins the invariants). Three prompts over it:
 - `longctx_needle` -- one dated fact (The Salt Garden premiere, 1928) buried mid-list
   among distractor years, stated exactly once.
 
-Article length is bounded (tests pin 9k-14k chars) and these prompts cap generation
-at 4096 tokens (`Prompt.max_completion_tokens`) so article + answer fits the smallest
-server context in the fleet -- North Mini Code at `-c 8192`. That is a harness
-constraint, not a claim that 2.5k tokens is a long article for a 262k-context model.
+Article length is bounded (tests pin 9k-14k chars). These prompts are marked
+`article_sized`, and their generation cap is derived per model as
+`ModelConfig.n_ctx - ARTICLE_PROMPT_RESERVE` rather than pinned to a literal. That is a
+harness constraint, not a claim that 2.5k tokens is a long article for a 262k-context
+model.
+
+**Why the cap is derived (2026-08-21).** It used to be a flat 4096, copied from the
+smallest server context in the fleet. Every `empty` result in the 2026-08-21 sweep was
+exactly 4096 completion tokens, decoded at the config's normal speed: Nemotron 6/6,
+North Mini 3/3, Gemma 26B think 3/3. None of them failed to answer; all of them were cut
+mid-thought. Since the other four categories sit at ceiling for seven of ten configs,
+that single literal decided most of the published ranking. One model's memory bound must
+never become the whole fleet's answer budget.
+
+**What the wider budget then measured (2026-08-21, single attempt).** North Mini Code at
+`-c 16384` was re-run on `longctx_consistent` with the derived 12,288-token cap. It hit
+that cap too: `finish_reason: "length"`, 12,288 completion tokens, 968s, and nothing left
+after `_strip_think`. So the wider budget does not rescue it -- it converts an
+uninterpretable `empty` into a measured refusal to terminate on the article that contains
+nothing to find. That is the point of the change: at 4,096 tokens truncation and inability
+were indistinguishable, and now they are not. Note the same attempt would have been a
+`timeout` under the old 300s `REQUEST_TIMEOUT`, which is why the timeout and the cap move
+together.
 
 ### structured (3 prompts)
 
@@ -84,12 +103,20 @@ is reasoning and a background agent is latency-insensitive.
 
 ## Fail classification
 
-`fail_kind` splits failures into `wrong` / `timeout` / `empty` so the summary table
-never conflates "too slow to finish" with "wrong answer". Failed API attempts retain
+`fail_kind` splits failures into `wrong` / `timeout` / `empty` / `truncated` so the
+summary table never conflates a harness limit with a wrong answer. Only `wrong` is a
+model verdict: the attempt finished on its own and the verifier rejected it. `truncated`
+means llama.cpp reported `finish_reason: "length"`, so the generation cap stopped the
+model mid-answer and the verifier judged a fragment. Failed API attempts retain
 their measured wall time; a request timeout therefore contributes the full timeout
 duration to prompt and model totals.
 Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
 cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
+
+**`REQUEST_TIMEOUT` and the generation cap are one setting.** An attempt can only reach
+its cap if `REQUEST_TIMEOUT >= cap / decode tok/s`. When it cannot, every long prompt on
+that config records `timeout` and the category measures the harness. Check the arithmetic
+against the slowest config in the run before trusting a long-context column.
 
 **Evaluating accuracy-affecting toggles (think/no-think, sampling): run both variants and
 read per-category, never judge from the aggregate.** The curated Gemma configurations

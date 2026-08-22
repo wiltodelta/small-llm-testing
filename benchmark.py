@@ -27,12 +27,20 @@ RESULTS_DIR = Path(__file__).parent / "results"
 HF_HUB_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
 SERVER_STARTUP_TIMEOUT = 300  # seconds -- 27B models take longer to mmap
-REQUEST_TIMEOUT = 300  # cap per request. Was 120: on slow dense models (27B at ~5 tok/s)
-# think-mode coding drowned in timeouts rather than wrong answers -- the root cause was
-# decode speed, not loops (presence_penalty verified, did not help). 300s covers
-# think-mode coding at the slowest decode we benchmark while still failing real hangs.
+# Per-request wall-clock cap. This value and the generation cap are ONE setting, not two:
+# a request can only reach `max_tokens` if REQUEST_TIMEOUT >= max_tokens / decode tok/s.
+# When it cannot, the slow config records `timeout` on every long prompt and the category
+# silently measures the harness instead of the model -- that is what happened to the
+# 2026-08-21 sweep, where a flat 300s could not reach a 4096-token cap below ~14 tok/s.
+# 1800s reaches the article cap at ~9 tok/s. Anything slower is genuinely out of budget
+# for an unattended pass and is recorded as `timeout`, never as a wrong answer.
+REQUEST_TIMEOUT = 1800
 DEFAULT_PORT = 8080
 DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperature noise
+DEFAULT_N_CTX = 16384  # server context; per-model override via ModelConfig.n_ctx
+# Tokens held back from n_ctx for the article prompt itself when sizing an article-scale
+# answer. The Ferrel article is ~2.5k tokens; 4096 leaves headroom for template overhead.
+ARTICLE_PROMPT_RESERVE = 4096
 PYEXEC_TIMEOUT = 5  # seconds budget per coding test execution
 
 
@@ -72,6 +80,15 @@ class ModelConfig:
     direct_sampling: SamplingPreset | None = None
     # OpenAI-compatible reasoning effort for models trained on named effort levels.
     reasoning_effort: str | None = None
+    # Server context window. It bounds the article prompt plus its answer, so it is the
+    # setting the long-context generation cap is derived from -- see ARTICLE_PROMPT_RESERVE.
+    # Raise it per model only from a measured server start, never from an estimate.
+    n_ctx: int = DEFAULT_N_CTX
+
+    @property
+    def article_cap(self) -> int:
+        """Generation budget for an article-sized prompt on this config."""
+        return self.n_ctx - ARTICLE_PROMPT_RESERVE
 
 
 def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[ModelConfig]:
@@ -156,7 +173,11 @@ AGENTIC_TEXT_MODELS: list[ModelConfig] = [
         temperature=1.0,
         top_p=0.95,
         top_k=0,
-        server_args=("-c", "8192"),
+        # 8192 was a memory guess carried over from the 16 GB machine and it capped the
+        # whole fleet's article budget. Verified 2026-08-21 on this M5 (24.96 GB working
+        # set): the UD-Q4_K_M weights load at -c 16384 and serve. The card documents 256K
+        # context and 64K output, so 16384 is still a local memory bound, not the model's.
+        n_ctx=16384,
     )
 ]
 
@@ -182,10 +203,12 @@ class Prompt:
     category: str
     messages: list[dict[str, object]]
     verify: Verifier
-    # Optional per-prompt generation cap, lower than the mode default (16384 think /
-    # 4096 direct). Long-context prompts set it so a ~3k-token article plus the answer
-    # fits the smallest server context in the fleet (North Mini Code at -c 8192).
-    max_completion_tokens: int | None = None
+    # True for prompts whose input is a full article. Their generation cap is derived
+    # per model from `ModelConfig.n_ctx` minus ARTICLE_PROMPT_RESERVE, so the budget
+    # follows the server context instead of a literal. A fixed literal is what made the
+    # 2026-08-21 longcontext column measure the cap: every `empty` result in that sweep
+    # was exactly 4096 tokens, decoded at the config's normal speed, cut mid-thought.
+    article_sized: bool = False
 
 
 # ---- verifier helpers --------------------------------------------------------
@@ -392,8 +415,8 @@ def _user(text: str) -> list[dict[str, object]]:
 # variants are byte-identical except for the Legacy birth year: 1887 matches the
 # lead and Early life sections; 1891 is the single planted contradiction. Fictional
 # entities keep world knowledge out of the answer: only the given text can decide.
-# Length is bounded (tests pin 9000-14000 chars) so article + capped answer fits the
-# smallest server context in the fleet (North Mini Code at -c 8192).
+# Length is bounded (tests pin 9000-14000 chars); the answer budget is whatever the
+# serving config's context leaves after ARTICLE_PROMPT_RESERVE.
 # Wrapped to keep lint happy; _reflow rejoins the lines so the prompt text is
 # single-line prose paragraphs regardless of source formatting.
 _FERREL_TEMPLATE_RAW = """Augustin Ferrel
@@ -828,7 +851,7 @@ PROMPTS: list[Prompt] = [
         # The planted birth-year contradiction (lead/Early life 1887 vs Legacy 1891) sits
         # thousands of tokens apart; finding it is the wiki-audit task at article scale.
         verify=v_yes_no(want_yes=True),
-        max_completion_tokens=4096,
+        article_sized=True,
     ),
     Prompt(
         name="longctx_consistent",
@@ -837,7 +860,7 @@ PROMPTS: list[Prompt] = [
         # Same length and shape, no contradiction: measures the false-positive rate,
         # which for an unattended agent is as damaging as a miss.
         verify=v_yes_no(want_yes=False),
-        max_completion_tokens=4096,
+        article_sized=True,
     ),
     Prompt(
         name="longctx_needle",
@@ -850,7 +873,7 @@ PROMPTS: list[Prompt] = [
         ),
         # One dated fact buried mid-list among distractor years; stated exactly once.
         verify=v_number(1928),
-        max_completion_tokens=4096,
+        article_sized=True,
     ),
 ]
 
@@ -858,6 +881,16 @@ PROMPTS: list[Prompt] = [
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChatResult:
+    """One chat completion, with the generation budget it ran under."""
+
+    text: str
+    tokens: int
+    truncated: bool
+    max_tokens: int
 
 
 @dataclass
@@ -1049,8 +1082,6 @@ DEFAULT_SERVER_ARGS: tuple[str, ...] = (
     "on",
     "-ub",
     "1024",
-    "-c",
-    "16384",
 )
 
 
@@ -1060,6 +1091,11 @@ def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
     if model_path is None:
         msg = f"Model file not cached: {model.hf}"
         raise FileNotFoundError(msg)
+    # Context comes from n_ctx alone. A `-c` smuggled into server_args would restore the
+    # two-sources-of-truth that let one model's memory bound size the whole fleet's budget.
+    if "-c" in model.server_args:
+        msg = f"{model.name}: set the context via n_ctx, not server_args"
+        raise ValueError(msg)
     # Per-model server_args override defaults for the same flag (last value wins in llama-server).
     cmd = [
         LLAMA_SERVER,
@@ -1068,6 +1104,8 @@ def _start_server(model: ModelConfig, port: int) -> subprocess.Popen[bytes]:
         "--port",
         str(port),
         *DEFAULT_SERVER_ARGS,
+        "-c",
+        str(model.n_ctx),
         *model.server_args,
     ]
     # Gemma 4 ships its MTP head as a SEPARATE `mtp-*.gguf` draft file in the snapshot;
@@ -1127,8 +1165,8 @@ def _chat(
     *,
     thinking: bool,
     max_tokens_cap: int | None = None,
-) -> tuple[str, int]:
-    """Send a chat completion request. Returns (response_text, token_count).
+) -> ChatResult:
+    """Send a chat completion request.
 
     `thinking` is the effective per-request decision (see `_thinks` for the per-category
     gate), not necessarily `model_cfg.thinking`. `max_tokens_cap` optionally lowers the
@@ -1136,8 +1174,8 @@ def _chat(
     """
     api_url = API_URL.format(port=port)
     # Thinking mode needs more headroom than direct answers. 16k covers the short
-    # benchmark prompts without truncation. Long-context prompts cap below the mode
-    # default so a ~3k-token article + answer fits the smallest fleet context (8192).
+    # benchmark prompts without truncation. Article-sized prompts pass a cap derived
+    # from the serving context (see ARTICLE_PROMPT_RESERVE).
     max_tokens = 16384 if thinking else 4096
     if max_tokens_cap is not None:
         max_tokens = min(max_tokens, max_tokens_cap)
@@ -1183,9 +1221,16 @@ def _chat(
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         body = json.loads(resp.read().decode())
 
-    text: str = body["choices"][0]["message"]["content"]
-    tokens: int = body["usage"]["completion_tokens"]
-    return text, tokens
+    choice = body["choices"][0]
+    return ChatResult(
+        text=choice["message"]["content"],
+        tokens=body["usage"]["completion_tokens"],
+        # llama.cpp reports "length" when generation stopped on max_tokens rather than
+        # on an end-of-turn token. That is the harness cutting the model off, and it is
+        # not the same failure as a finished answer the verifier rejected.
+        truncated=choice.get("finish_reason") == "length",
+        max_tokens=max_tokens,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1226,13 +1271,14 @@ def _api_fail_reason(exc: BaseException) -> str:
 
 def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attempt:
     start = time.monotonic()
+    cap = model_cfg.article_cap if prompt.article_sized else None
     try:
-        text, tokens = _chat(
+        result = _chat(
             prompt.messages,
             model_cfg,
             port,
             thinking=_thinks(model_cfg, prompt),
-            max_tokens_cap=prompt.max_completion_tokens,
+            max_tokens_cap=cap,
         )
     except Exception as e:
         elapsed = time.monotonic() - start
@@ -1246,8 +1292,13 @@ def _run_one_attempt(prompt: Prompt, model_cfg: ModelConfig, port: int) -> Attem
             fail_reason=reason,
         )
     elapsed = time.monotonic() - start
-    ok, reason = prompt.verify(text)
-    return Attempt(tokens=tokens, time_s=round(elapsed, 2), response=text, ok=ok, fail_reason=reason)
+    ok, reason = prompt.verify(result.text)
+    if not ok and result.truncated:
+        # The model was still generating when the budget ran out, so the verifier judged
+        # a fragment. Recording that as `wrong` or `empty` attributes a harness limit to
+        # the model; `truncated` keeps the two apart in the summary tables.
+        reason = f"truncated: hit the {result.max_tokens}-token generation cap"
+    return Attempt(tokens=result.tokens, time_s=round(elapsed, 2), response=result.text, ok=ok, fail_reason=reason)
 
 
 def _run_prompt(prompt: Prompt, model_cfg: ModelConfig, port: int, n: int) -> PromptResult:
@@ -1409,10 +1460,13 @@ def _save_json(results: list[ModelResult]) -> Path:
 
 
 def fail_kind(reason: str) -> str:
-    """Classify a failed attempt so 'too slow' is not conflated with 'wrong answer':
-    'timeout' (ran past REQUEST_TIMEOUT), 'empty' (no usable output / api error),
-    or 'wrong' (finished but the verifier rejected the answer)."""
+    """Classify a failed attempt so a harness limit is never read as a wrong answer:
+    'timeout' (ran past REQUEST_TIMEOUT), 'truncated' (stopped on the generation cap
+    mid-answer), 'empty' (no usable output / api error), or 'wrong' (finished on its
+    own and the verifier rejected the answer). Only 'wrong' is a model verdict."""
     low = reason.lower()
+    if low.startswith("truncated"):
+        return "truncated"
     if "timeout" in low or "timed out" in low:
         return "timeout"
     if reason == "empty" or low.startswith("api error"):
@@ -1420,10 +1474,10 @@ def fail_kind(reason: str) -> str:
     return "wrong"
 
 
-def count_fail_kinds(fail_reasons: Iterable[str]) -> tuple[int, int, int]:
-    """Count failed-attempt reasons as a (wrong, timeout, empty) tuple via fail_kind."""
+def count_fail_kinds(fail_reasons: Iterable[str]) -> tuple[int, int, int, int]:
+    """Count failed-attempt reasons as a (wrong, timeout, empty, truncated) tuple."""
     kinds = [fail_kind(r) for r in fail_reasons]
-    return kinds.count("wrong"), kinds.count("timeout"), kinds.count("empty")
+    return kinds.count("wrong"), kinds.count("timeout"), kinds.count("empty"), kinds.count("truncated")
 
 
 def _save_markdown(results: list[ModelResult]) -> Path:
@@ -1436,17 +1490,18 @@ def _save_markdown(results: list[ModelResult]) -> Path:
         "",
         "Each prompt sampled multiple times; cell shows passes/n.",
         "Wall-clock total = sum of all attempt times. tok/s computed only over attempts >=50 tokens.",
-        "Fails split as wrong/timeout/empty -- a timeout is too-slow-to-finish, not a wrong answer.",
+        "Fails split as wrong/timeout/empty/truncated -- only `wrong` is a model verdict; the other",
+        "three mean the harness stopped the attempt (request timeout, API error, generation cap).",
         "",
         "## Summary",
         "",
-        "| Model | Passes | Fails (wrong/timeout/empty) | Total time | tok/s (gen, long-only) |",
+        "| Model | Passes | Fails (wrong/timeout/empty/truncated) | Total time | tok/s (gen, long-only) |",
         "|---|---|---|---|---|",
     ]
     for r in results:
-        w, t, e = count_fail_kinds(a.fail_reason for p in r.prompts for a in p.attempts if not a.ok)
+        w, t, e, x = count_fail_kinds(a.fail_reason for p in r.prompts for a in p.attempts if not a.ok)
         lines.append(
-            f"| {r.model_name} | {r.passes}/{r.attempts_total} | {w}/{t}/{e} | "
+            f"| {r.model_name} | {r.passes}/{r.attempts_total} | {w}/{t}/{e}/{x} | "
             f"{r.total_time_s:.1f}s | {r.gen_tok_per_s:.1f} |"
         )
     lines.append("")

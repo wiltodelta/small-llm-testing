@@ -31,6 +31,10 @@ uv run python benchmark.py -n 1
 
 Default llama-server port: **8080**.
 
+Every run produces timing numbers, so confirm the machine is idle before starting one:
+`sysctl -n vm.loadavg` under ~4.0 and swap not near full. Under load a config has read
+1.7 tok/s where it otherwise measures 15.
+
 ## Scripts
 
 - `maintain.sh` -- the canonical Python gate, run after `uv sync`.
@@ -46,8 +50,8 @@ Default llama-server port: **8080**.
 ## Configuration
 
 For the mandatory model-research checklist, per-flag `ModelConfig` semantics,
-`DEFAULT_SERVER_ARGS`, and the f16-vs-q8_0 KV justification, see
-`docs/configuration.md`.
+`DEFAULT_SERVER_ARGS`, the per-model `n_ctx` that the article answer budget derives from,
+and the f16-vs-q8_0 KV justification, see `docs/configuration.md`.
 
 ## Test set
 

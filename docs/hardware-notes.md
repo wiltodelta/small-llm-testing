@@ -14,6 +14,9 @@ a one-line Swift Metal query (do not guess it):
   The PATH `llama-server` (`llama-cpp-bundled` 10380) cannot load BailingMoE3.
 - North Mini Code 1.0 UD-Q4_K_M (~19.2 GB) loaded at `-c 8192` with full Metal
   offload on llama.cpp build 10090 and completed the text suite without a memory error.
+  Rechecked 2026-08-21 on build 10380: it also loads and serves at `-c 16384`, which is
+  now its `n_ctx`. The old 8192 was a carried-over guess, and it was sizing the article
+  answer budget for every other model in the fleet.
 - Qwen 3.6 35B-A3B UD-Q4_K_M (~21 GB) loaded at `-c 8192` during the broad sweep.
 - OLMo 3.1 32B Instruct Q4_K_M (~19.5 GB) loaded at `-c 8192`. The original
   Jinja template and a chat completion were smoke-tested successfully on llama.cpp

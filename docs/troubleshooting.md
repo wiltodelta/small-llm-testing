@@ -25,8 +25,9 @@
 - Muse Glimmer needed llama.cpp PR #26841. It is retired from reruns; the note
   remains only for historical snapshots.
 - Nemotron 3.5 Lightning GGUFs need llama.cpp 10362+. The local `Q3_K_M` is a
-  memory-safe quant (`Q4_K_M` is 25.48 GB). A 300s `REQUEST_TIMEOUT` cannot finish
-  the 4,096-token long-context cap at ~5 tok/s; those fails are timeouts, not wrong
+  memory-safe quant (`Q4_K_M` is 25.48 GB). The old 300s `REQUEST_TIMEOUT` could not
+  finish the then-fixed 4,096-token long-context cap at ~5 tok/s; those fails are
+  budget artifacts, not wrong
   answers. HTTP API errors now store status and body in `fail_reason`.
 - Do not run a benchmark concurrently with large model downloads. A ~17 GB model in the
   GPU working set plus a multi-GB download piling on memory pressure gets llama-server

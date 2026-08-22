@@ -45,8 +45,15 @@ whole run. Pass `--port 8081` or another free port when the default port is occu
 `DEFAULT_SERVER_ARGS` applies:
 
 ```text
--ngl 99 -fa on -ub 1024 -c 16384
+-ngl 99 -fa on -ub 1024
 ```
+
+The context window is not in that tuple. It comes from `ModelConfig.n_ctx` (default
+`DEFAULT_N_CTX`, 16,384) so one model's memory bound cannot silently size the whole
+fleet's answer budget, which is what `-c 8192` on North Mini Code did until 2026-08-21.
+Raise a model's `n_ctx` only from a measured server start on this machine. `_start_server`
+rejects a `-c` passed through `server_args`, so `n_ctx` stays the single source of truth, and
+`ModelConfig.article_cap` derives the article answer budget from it.
 
 KV remains at llama.cpp's f16 default. On this machine it fits the curated set and
 decodes faster than the previous q8_0 KV configuration. Quantized K was a smaller-memory
@@ -75,10 +82,10 @@ neutral value used by the benchmark instead of silently inheriting project defau
 ## Full-sweep presets
 
 The benchmark caps generated output at 16,384 tokens for thinking requests and 4,096
-for direct requests, with one exception: the long-context prompts set a per-prompt
-4,096-token cap in both modes (`Prompt.max_completion_tokens`), so a ~2.5k-token
-article plus its answer fits the smallest server context in the fleet (North Mini
-Code at `-c 8192`). Those are suite limits, not claims about each model's maximum.
+for direct requests, with one exception: prompts marked `article_sized` derive their cap
+per model as `n_ctx - ARTICLE_PROMPT_RESERVE` (12,288 at the default context), so the
+budget follows the serving context instead of a literal. Those are suite limits, not
+claims about each model's maximum.
 All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0` and
 `1`. A neutral `top_p=1` or `top_k=0` means that sampler is disabled.
 
@@ -93,8 +100,8 @@ All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0
 
 Retired challenger presets (LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer) are specified
 below so a future rerun does not rediscover them. Qwen3.8-27B and Nemotron stay in
-`CHALLENGERS` until a rerun with recorded HTTP bodies and a timeout that can finish
-the 4,096-token long-context cap. Fara1.5-4B is also below, but it is rerun separately
+`CHALLENGERS` until a rerun on the corrected budget (derived article cap plus
+`REQUEST_TIMEOUT` 1800s). Fara1.5-4B is also below, but it is rerun separately
 from the text sweep.
 
 ## Researched challenger presets
@@ -160,9 +167,11 @@ local verdicts are retained so a future rerun does not have to rediscover them.
   exceeds the 24.96 GB Metal working-set ceiling. MTP is embedded.
 - Source: [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16).
 - 2026-08-18 snapshot is not a quality verdict. 59/66, and every fail was a
-  300-second `TimeoutError` on thinking prompts. At 5.4 tok/s the 4,096-token
-  long-context cap needs ~760s, so `REQUEST_TIMEOUT=300` stops the request before
-  an answer. Recheck with a timeout that can finish the cap, still on `Q3_K_M`.
+  300-second `TimeoutError` on thinking prompts. At 5.4 tok/s the then-fixed
+  4,096-token long-context cap needed ~760s, so `REQUEST_TIMEOUT=300` stopped the
+  request before an answer. The 2026-08-21 rerun hit the other half of the same
+  defect: six `empty` results, each exactly 4,096 tokens cut mid-thought. Both are
+  budget artifacts, not quality. Recheck on the corrected budget, still on `Q3_K_M`.
 
 ### Muse Glimmer 30B
 

@@ -61,7 +61,7 @@ QUICK_CHOICES = {
 }
 
 
-def _fail_counts(model: ModelDict) -> tuple[int, int, int]:
+def _fail_counts(model: ModelDict) -> tuple[int, int, int, int]:
     return count_fail_kinds(a["fail_reason"] for p in model["prompts"] for a in p["attempts"] if not a["ok"])
 
 
@@ -145,19 +145,20 @@ def main() -> None:
         f"Test set: discriminating text core plus agent-scenario categories, n=3 per prompt. "
         f"Every config scores out of `/{suite_attempts}`.",
         "",
-        "Caveats: (1) fails split `wrong/timeout/empty` -- a timeout is too-slow-to-finish,",
-        "not a wrong answer. (2) `tok/s` from this long suite is thermally throttled toward",
-        "the end; use `llama-bench` on a cool machine for peak decode speed.",
+        "Caveats: (1) fails split `wrong/timeout/empty/truncated` -- only `wrong` is a model",
+        "verdict; the other three mean the harness stopped the attempt. (2) `tok/s` from this",
+        "long suite is thermally throttled toward the end; use `llama-bench` on a cool machine",
+        "for peak decode speed.",
         "",
         "## All configs",
         "",
-        "| Model | Passes | Fails w/t/e | Total time | tok/s |",
+        "| Model | Passes | Fails w/t/e/x | Total time | tok/s |",
         "|---|---|---|---|---|",
     ]
     for name, m in models.items():
-        w, t, e = _fail_counts(m)
+        w, t, e, x = _fail_counts(m)
         lines.append(
-            f"| {name} | {m['passes']}/{m['attempts_total']} | {w}/{t}/{e} | "
+            f"| {name} | {m['passes']}/{m['attempts_total']} | {w}/{t}/{e}/{x} | "
             f"{m['total_time_s']:.0f}s | {m['gen_tok_per_s']:.1f} |"
         )
 
@@ -165,14 +166,15 @@ def main() -> None:
         "",
         "## Thinking vs no-thinking",
         "",
-        "| Config | think | nothink | think fails w/t/e |",
+        "| Config | think | nothink | think fails w/t/e/x |",
         "|---|---|---|---|",
     ]
     for base in _think_pairs(models):
         th, no = models[f"{base}-think"], models[f"{base}-nothink"]
-        w, t, e = _fail_counts(th)
+        w, t, e, x = _fail_counts(th)
         lines.append(
-            f"| {base} | {th['passes']}/{th['attempts_total']} | {no['passes']}/{no['attempts_total']} | {w}/{t}/{e} |"
+            f"| {base} | {th['passes']}/{th['attempts_total']} | "
+            f"{no['passes']}/{no['attempts_total']} | {w}/{t}/{e}/{x} |"
         )
 
     out = RESULTS_DIR / "COMPARISON.md"

@@ -60,15 +60,16 @@ class TestFailCounts:
                         _attempt(ok=False, fail_reason="no number ~=24"),
                         _attempt(ok=False, fail_reason="exec timeout"),
                         _attempt(ok=False, fail_reason="empty"),
+                        _attempt(ok=False, fail_reason="truncated: hit the 12288-token generation cap"),
                     ]
                 }
             ]
         }
-        assert _fail_counts(model) == (1, 1, 1)
+        assert _fail_counts(model) == (1, 1, 1, 1)
 
     def test_passing_attempts_are_not_counted(self) -> None:
         model = {"prompts": [{"attempts": [_attempt(ok=True), _attempt(ok=True)]}]}
-        assert _fail_counts(model) == (0, 0, 0)
+        assert _fail_counts(model) == (0, 0, 0, 0)
 
 
 class TestQuickChoice:

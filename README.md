@@ -41,7 +41,7 @@ help choose a local model are excluded from current reruns:
 
 | Status | Models | Reason |
 |--------|--------|--------|
-| Current challenger recheck | Qwen3.8-27B, Nemotron 3.5 Lightning | Previous agent-scenario snapshots are not quality verdicts; rerun with HTTP body logging and a timeout that can finish the 4,096-token cap |
+| Current challenger recheck | Qwen3.8-27B, Nemotron 3.5 Lightning | Previous agent-scenario snapshots are not quality verdicts; rerun on the corrected budget (derived article cap, `REQUEST_TIMEOUT` 1800s) |
 | Separate multimodal track | Fara1.5-4B | Requires screenshots, browser actions, and irreversible-action checks |
 | Agentic text only | North Mini Code | Accurate on the old text core, does not beat Mellum2; keep for tool-use measurement |
 | Retired from reruns | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 9B/35B; Agents-A1 4B; LFM2.5-2.6B; Nanbeige4.2-3B; Muse Glimmer 30B | Duplicated a stronger speed/accuracy point, or consumed too much time for a text-only result |
@@ -66,7 +66,7 @@ limit, upstream llama.cpp support, and the vendor's recommended inference settin
 | [North Mini Code 1.0](https://huggingface.co/blog/CohereLabs/introducing-north-mini-code) | Accurate on the old text core, does not beat Mellum2. Stays on the agentic track. |
 | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Keep as challenger. Official think/direct sampling and `xhigh` effort match the card. The 0/66 think snapshot is a harness HTTPError with no body, not a model score. See the [preset](docs/configuration.md#qwen38-27b). |
 | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | Dominated on the 12-prompt core; 22-prompt rerun never finished. Retired; see the [verified preset](docs/configuration.md#muse-glimmer-30b). |
-| [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | Keep as challenger. Official sampling matches; local `Q3_K_M` is the memory-safe quant. The 7 fails were 300s timeouts (5.4 tok/s cannot finish 4,096 tokens in 300s). See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
+| [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | Keep as challenger. Official sampling matches; local `Q3_K_M` is the memory-safe quant. Its fails have always been budget artifacts: 300s timeouts in the 2026-08-18 snapshot, then six `empty` results in the 2026-08-21 sweep, each exactly 4,096 tokens cut mid-thought. See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
 | [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny) | Next challenger once PATH llama-server includes BailingMoE3. 7.9B/1.3B, MacBook-oriented, Q8_0 cached and smoke-tested on build 10544. See the [preset](docs/configuration.md#ling-30-tiny). |
 | [Ornith-1.5-9B](https://huggingface.co/ornith-ai/Ornith-1.5-9B) | Official GGUF, 9.53 GB Q8_0. Successor to retired Ornith 1.0. One-at-a-time after Ling. |
 | [LFM2.5-1.2B-Thinking](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking) | Smaller than the already-dominated 2.6B. Skip. |
@@ -234,8 +234,10 @@ server-start failures. The suite is uniformly text.
 `math`/`reasoning`/`coding`/`consistency`/`longcontext` (`THINKING_CATEGORIES` in
 `benchmark.py`). `structured` is deliberately excluded -- thinking on JSON/strict-format
 tasks wastes tokens and can break the format -- so `-think` configs run those prompts
-direct. Long-context prompts cap generation at 4096 tokens so a ~2.5k-token article plus
-its answer fits the smallest server context in the fleet (North Mini Code at `-c 8192`).
+direct. Long-context prompts are marked `article_sized` and derive their generation cap
+per model as `n_ctx - ARTICLE_PROMPT_RESERVE` (12,288 at the default context). It was a
+flat 4,096 until 2026-08-21, when every `empty` result in the sweep turned out to be
+exactly 4,096 tokens cut mid-thought rather than a model failing to answer.
 
 ## Sampling parameters
 
@@ -265,8 +267,11 @@ Notes:
 ## Server flags applied to all models
 
 ```
--ngl 99 -fa on -ub 1024 -c 16384
+-ngl 99 -fa on -ub 1024
 ```
+
+Context comes from `ModelConfig.n_ctx` (default 16,384) rather than a shared flag, so one
+model's memory bound cannot size the whole fleet's answer budget.
 
 KV cache is left at the **f16 default**, not quantized. On the 32 GB machine every
 model fits with f16 KV, and f16 is measurably faster than q8_0 KV. Measured on this M5
@@ -283,7 +288,8 @@ f16 KV is ~1.7x faster decode than the old `q8_0/q8_0` -- quantized K on Metal i
 especially costly. `q8_0` KV was a 16 GB-machine memory hack and is no longer used.
 `-fa on` stays (it helps with f16 KV too; it is only *required* when KV is quantized).
 
-The curated models use the default `-c 16384`.
+The curated models use the default `n_ctx` of 16,384. North Mini Code ran at 8,192 until
+2026-08-21; it is verified to load and serve at 16,384 on this M5 (24.96 GB working set).
 
 Multi-token prediction: every Gemma run uses a separate `mtp-*.gguf` draft file that
 `_start_server` auto-attaches via `--model-draft`. It enables MTP with `--spec-type draft-mtp
@@ -327,10 +333,14 @@ after a complete benchmark to refresh the comparison and README quick-choice tab
 
 **Reading the numbers:**
 
-- **Fails are split `wrong/timeout/empty`.** A timeout means the answer ran past
-  `REQUEST_TIMEOUT` (currently 300s) -- too slow to finish, not a wrong answer. This matters for
-  big think-mode configs: e.g. 27B-think scores low mostly on timeouts (long reasoning
-  traces at a few tok/s), which is a speed limit, not a reasoning failure.
+- **Fails are split `wrong/timeout/empty/truncated`.** Only `wrong` is a model verdict:
+  the attempt finished on its own and the verifier rejected it. A timeout means the answer
+  ran past `REQUEST_TIMEOUT` (currently 1800s); `truncated` means the generation cap cut
+  the model off mid-answer. Both are speed or budget limits, not reasoning failures, and
+  they are why big think-mode configs score low.
+- **`REQUEST_TIMEOUT` and the generation cap are one setting.** An attempt reaches its cap
+  only if `REQUEST_TIMEOUT >= cap / decode tok/s`. Check that against the slowest config in
+  a run before reading its long-context column as a model result.
 - **Speed vs accuracy are separate concerns.** Absolute `tok/s` from a long full-suite
   run is depressed by thermal throttling that accumulates over hours (early configs run
   cooler/faster than late ones). For true peak decode speed, measure one model on a cool

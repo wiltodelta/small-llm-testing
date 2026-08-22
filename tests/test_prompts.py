@@ -19,6 +19,7 @@ import benchmark
 from benchmark import (
     FERREL_ARTICLE,
     FERREL_ARTICLE_BAD,
+    FULL_SWEEP_MODELS,
     MODELS,
     PROMPTS,
     THINKING_CATEGORIES,
@@ -156,13 +157,26 @@ class TestFerrelArticle:
 
 
 class TestLongcontextPrompts:
-    def test_prompts_carry_article_and_output_cap(self) -> None:
+    def test_prompts_carry_article_and_derive_their_cap(self) -> None:
         for name in ("longctx_inconsistent", "longctx_consistent", "longctx_needle"):
             prompt = next(p for p in PROMPTS if p.name == name)
             content = str(prompt.messages[0]["content"])
-            assert prompt.max_completion_tokens == 4096
+            # The cap is derived per model from n_ctx, never pinned to a literal here:
+            # a literal is what made this category measure the budget instead of the model.
+            assert prompt.article_sized
             assert len(content) > 9000
             assert "Augustin Ferrel" in content
+
+    def test_article_budget_leaves_room_for_a_full_answer(self) -> None:
+        # Every serving config must leave an article-scale answer more than the 4096
+        # tokens that truncated three configs mid-thought in the 2026-08-21 sweep.
+        for cfg in FULL_SWEEP_MODELS:
+            assert cfg.article_cap > 4096, cfg.name
+
+    def test_context_is_not_smuggled_through_server_args(self) -> None:
+        # n_ctx is the single source of truth; a stray -c would reintroduce the defect.
+        for cfg in FULL_SWEEP_MODELS:
+            assert "-c" not in cfg.server_args, cfg.name
 
     def test_inconsistent_variant_planted_in_prompt(self) -> None:
         bad = next(p for p in PROMPTS if p.name == "longctx_inconsistent")
@@ -202,7 +216,12 @@ def test_chat_respects_per_prompt_token_cap(monkeypatch: pytest.MonkeyPatch) -> 
             return None
 
         def read(self) -> bytes:
-            return json.dumps({"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 1}}).encode()
+            return json.dumps(
+                {
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"completion_tokens": 1},
+                }
+            ).encode()
 
     def urlopen(request: object, timeout: int) -> Response:
         payloads.append(json.loads(request.data.decode()))  # type: ignore[attr-defined]

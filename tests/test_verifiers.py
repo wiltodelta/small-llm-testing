@@ -680,6 +680,7 @@ class TestFailKind:
             ("Server timed out", "timeout"),
             ("empty", "empty"),
             ("api error: URLError", "empty"),
+            ("truncated: hit the 12288-token generation cap", "truncated"),
             ("no number ~=24", "wrong"),
             ("missing key 'age'", "wrong"),
             ("", "wrong"),
