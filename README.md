@@ -288,6 +288,11 @@ f16 KV is ~1.7x faster decode than the old `q8_0/q8_0` -- quantized K on Metal i
 especially costly. `q8_0` KV was a 16 GB-machine memory hack and is no longer used.
 `-fa on` stays (it helps with f16 KV too; it is only *required* when KV is quantized).
 
+Do not read the 6.32 above as "what a 27B does here". It is Qwen3.6 on build 9380.
+Qwen3.8-27B Q4_K_M on build 10380 measures 1.46 tok/s cold, and which of the two
+differences explains the gap is unresolved -- see
+[cold llama-bench](docs/hardware-notes.md#cold-llama-bench-2026-08-22-build-10380-m5-f16-kv).
+
 The curated models use the default `n_ctx` of 16,384. North Mini Code ran at 8,192 until
 2026-08-21; it is verified to load and serve at 16,384 on this M5 (24.96 GB working set).
 

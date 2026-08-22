@@ -159,6 +159,12 @@ local verdicts are retained so a future rerun does not have to rediscover them.
   58s then `api error: HTTPError`, later requests 0.01-0.11s, no response body
   stored. Direct: 53/66 real wrong answers, 1.8 tok/s. Recheck with HTTP body
   logging before judging the model.
+- Cold llama-bench 2026-08-22 (build 10380, idle machine): tg128 1.46 tok/s, 1.19 at
+  depth 3072, pp512 40.21. The suite's 2.6 tok/s was therefore real, not contention.
+  At that speed a 12,288-token article answer needs over two hours, so this config
+  cannot finish the agent scenario within any sane unattended budget on this machine.
+  Whether that is the model or llama.cpp build 10380 is unresolved; see
+  [`hardware-notes.md`](hardware-notes.md).
 
 ### Nemotron 3.5 Lightning 30B-A3B
 
