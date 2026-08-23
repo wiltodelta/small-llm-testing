@@ -85,10 +85,30 @@ an architecture class for what is a model and a build.
 number on this machine is 5.17 tok/s, so a 12,288-token article answer needs about 40
 minutes per attempt, times three samples, times the prompt count.
 
-**MLX is not faster.** `mlx-community/Qwen3.6-27B-4bit` generated 256 tokens at 3.687
-tok/s with a 15.4 GB peak, against llama.cpp's 5.17 on the same model at Q4_K_M. So the
-bottleneck is not llama.cpp's Metal path. Caveats: single run, no repeats, and MLX 4-bit
-is not bit-identical to Q4_K_M, so read it as "same order, not faster", not as a ratio.
+**MLX is not faster in general.** `mlx-community/Qwen3.6-27B-4bit` runs at 3.7-5.6 tok/s
+with a 15.4 GB peak, against llama.cpp's 5.17 on the same model at Q4_K_M. Read it as
+"same order, not faster": MLX 4-bit is not bit-identical to Q4_K_M.
+
+**But the Qwen3.8 collapse IS llama.cpp-specific.** The first MLX run only compared
+runtimes on Qwen3.6, which cannot see that. Running BOTH models under MLX, interleaved,
+four rounds, 256 tokens each:
+
+| Round | Qwen3.8-4bit | Qwen3.6-4bit | diff |
+|---|---:|---:|---:|
+| 1 | 6.869 | 5.632 | +1.237 |
+| 2 | 3.992 | 3.903 | +0.089 |
+| 3 | 3.399 | 3.427 | -0.028 |
+| 4 | 3.573 | 3.341 | +0.232 |
+
+Three of four differences favour Qwen3.8, sign test p = 0.31, so the two are
+**indistinguishable under MLX**. Under stock llama.cpp 10380 the same pair differs by
+3.5x (5.17 +/- 0.11 against 1.46 +/- 0.18, tight because llama-bench repeats three
+times). A model gap that is 3.5x in one runtime and absent in the other is a property of
+the runtime, not of the model. The PR-27342 build recovering Qwen3.8 to 3.31 fits the
+same story: newer master fixes part of it.
+
+Absolute MLX numbers here swing (median 3.90 across the eight runs, range 3.34-6.87), so
+only the within-round pairing is trustworthy; the machine was not fully idle.
 
 **DFlash2: it runs, its throughput here is not yet measured.** PR #27342 is open, not
 merged, so it needs a source build (`cmake -DGGML_METAL=ON`, then `--model-draft`,
