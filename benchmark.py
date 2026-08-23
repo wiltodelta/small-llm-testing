@@ -125,37 +125,13 @@ MODELS: list[ModelConfig] = [
     ),
 ]
 
-# Recheck after a broken 2026-08-18 run: Qwen thinking never produced a token
-# (HTTPError, body not recorded), and Nemotron's fails were 300s request timeouts
-# on thinking, not wrong answers. Sampling matches the official cards. Use
-# --full-sweep to add North Mini Code, or --model to select one config directly.
+# Nemotron is here because its 2026-08-18 fails were 300s request timeouts on thinking,
+# not wrong answers, and the budget that caused them has since been fixed. Qwen3.8-27B was
+# retired on 2026-08-23: it decodes at 1.5-3.3 tok/s here, so one article answer runs past
+# an hour, and neither a newer llama.cpp nor a DFlash2 draft brings it into range. Its
+# verified preset and the measurements are kept in docs/configuration.md. Use --full-sweep
+# to add North Mini Code, or --model to select one config directly.
 CHALLENGERS: list[ModelConfig] = [
-    ModelConfig(
-        name="qwen3.8-27b-Q4_K_M-think",
-        hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
-        revision="fdd03b8bbd279c1694563650e79d85a2373d9934",
-        temperature=1.0,
-        top_p=0.95,
-        top_k=20,
-        thinking=True,
-        direct_sampling=SamplingPreset(
-            temperature=0.7,
-            top_p=0.8,
-            top_k=20,
-            presence_penalty=1.5,
-        ),
-        reasoning_effort="xhigh",
-    ),
-    ModelConfig(
-        name="qwen3.8-27b-Q4_K_M-nothink",
-        hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
-        revision="fdd03b8bbd279c1694563650e79d85a2373d9934",
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        presence_penalty=1.5,
-        thinking=False,
-    ),
     ModelConfig(
         name="nemotron-3.5-lightning-30b-a3b-Q3_K_M",
         hf=("bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q3_K_M.gguf"),

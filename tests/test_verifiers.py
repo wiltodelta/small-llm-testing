@@ -40,6 +40,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 # Retired Muse config kept so DFlash attach and reasoning_strength stay tested.
+# Retired 2026-08-23 but kept as a fixture: it is the only preset exercising
+# direct_sampling + reasoning_effort together, and that seam outlives the model.
+_RETIRED_QWEN38 = ModelConfig(
+    name="qwen3.8-27b-Q4_K_M-think",
+    hf="unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-Q4_K_M.gguf",
+    temperature=1.0,
+    top_p=0.95,
+    top_k=20,
+    thinking=True,
+    direct_sampling=SamplingPreset(temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5),
+    reasoning_effort="xhigh",
+)
+
 _RETIRED_MUSE = ModelConfig(
     name="muse-glimmer-30b-high-Q4_K_XL",
     hf="unsloth/Muse-Glimmer-30B-GGUF:Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
@@ -64,8 +77,6 @@ def test_default_model_set_is_curated() -> None:
 
 def test_challenger_model_set_is_explicit() -> None:
     assert {model.name for model in CHALLENGERS} == {
-        "qwen3.8-27b-Q4_K_M-think",
-        "qwen3.8-27b-Q4_K_M-nothink",
         "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
     }
     assert len(CURRENT_TEXT_MODELS) == len(MODELS) + len(CHALLENGERS)
@@ -73,7 +84,7 @@ def test_challenger_model_set_is_explicit() -> None:
 
 def test_full_sweep_model_set_is_explicit_and_unique() -> None:
     assert {model.name for model in AGENTIC_TEXT_MODELS} == {"north-mini-code-1.0-Q4_K_M"}
-    assert len(FULL_SWEEP_MODELS) == 10
+    assert len(FULL_SWEEP_MODELS) == 8
     assert len({model.name for model in FULL_SWEEP_MODELS}) == len(FULL_SWEEP_MODELS)
 
 
@@ -114,33 +125,12 @@ def test_select_models_filter_excludes_retired_models_and_searches_agentic_set()
     assert _select_models("nanbeige", include_challengers=False) == []
     assert _select_models("muse-glimmer", include_challengers=False) == []
     assert _select_models("lfm2.5-2.6b", include_challengers=False) == []
-    assert [model.name for model in _select_models("qwen3.8", include_challengers=False)] == [
-        "qwen3.8-27b-Q4_K_M-think",
-        "qwen3.8-27b-Q4_K_M-nothink",
-    ]
+    # Retired 2026-08-23: too slow to finish an article answer on this machine.
+    assert _select_models("qwen3.8", include_challengers=False) == []
     assert [model.name for model in _select_models("nemotron", include_challengers=False)] == [
         "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
     ]
     assert _select_models("north-mini", include_challengers=False) == AGENTIC_TEXT_MODELS
-
-
-def test_qwen38_presets_match_official_thinking_modes() -> None:
-    thinking, direct = _select_models("qwen3.8", include_challengers=False)
-    assert thinking.reasoning_effort == "xhigh"
-    assert thinking.direct_sampling == SamplingPreset(
-        temperature=0.7,
-        top_p=0.8,
-        top_k=20,
-        presence_penalty=1.5,
-    )
-    assert direct.thinking is False
-    assert (direct.temperature, direct.top_p, direct.top_k, direct.presence_penalty) == (
-        0.7,
-        0.8,
-        20,
-        1.5,
-    )
-    assert thinking.revision == direct.revision == "fdd03b8bbd279c1694563650e79d85a2373d9934"
 
 
 def test_nemotron_uses_embedded_mtp() -> None:
@@ -342,7 +332,7 @@ def test_chat_sends_qwen38_mode_specific_preset(
         return Response()
 
     monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
-    benchmark._chat([{"role": "user", "content": "test"}], CHALLENGERS[0], 8081, thinking=thinking)
+    benchmark._chat([{"role": "user", "content": "test"}], _RETIRED_QWEN38, 8081, thinking=thinking)
 
     payload = payloads[0]
     actual_sampling = (payload["temperature"], payload["top_p"], payload["top_k"], payload["presence_penalty"])

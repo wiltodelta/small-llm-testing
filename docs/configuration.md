@@ -5,7 +5,7 @@ ever measured. A regression test pins its literal names so a broad experimental 
 cannot silently become the default again. Historical results and the retirement policy
 are documented in the README.
 
-`CHALLENGERS` is Qwen3.8-27B (think and direct) and Nemotron 3.5 Lightning.
+`CHALLENGERS` is Nemotron 3.5 Lightning. Qwen3.8-27B was retired on 2026-08-23 for speed; its preset and the measurements are kept below.
 The 2026-08-18 agent-scenario snapshots are not quality verdicts: Qwen thinking
 recorded a bare `HTTPError` with no response body, and Nemotron's fails were
 300-second request timeouts on thinking prompts. `--include-challengers` runs
@@ -29,7 +29,7 @@ Each `ModelConfig` defines:
 - `reasoning_strength`, used by Muse Glimmer. The requested strength applies to
   `THINKING_CATEGORIES`; direct prompts explicitly use `low`.
 - `direct_sampling`, used when a hybrid model documents a different sampler for direct
-  requests. Qwen3.8-27B's thinking config uses it on the suite's non-thinking categories.
+  requests. The retired Qwen3.8-27B preset below is the worked example.
 - `reasoning_effort`, sent as an OpenAI-compatible top-level request field for thinking
   requests. llama.cpp maps it into the chat-template kwargs.
 - `server_args`, for model-specific llama-server overrides.
@@ -94,14 +94,13 @@ All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0
 | Gemma 4 E2B and 26B-A4B | `temp=1`, `top_p=.95`, `top_k=64` | Separate think/direct configs; thinking for math, reasoning, coding, consistency, and longcontext | 131K context; official examples use 512-1,024 output tokens, not a stated maximum | [official Gemma 4 card](https://huggingface.co/google/gemma-4-e2b-it) |
 | LFM2.5-8B-A1B | `.2/1/80`, repetition `1.05` | No thinking toggle; general chat and tool use share the native template | 128K context; official example uses 8,192 output tokens, not a stated maximum | [official card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
 | Mellum2-12B-A2.5B | `.6/.95/20` | Native thinking, no direct toggle; intended for coding and reasoning | 131K context; official usage example allows 81,920 output tokens | [official card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
-| Qwen3.8-27B | Think `1/.95/20`; direct `.7/.8/20`, presence `1.5` | Separate think/direct configs; think mode uses `xhigh` effort | 262K native context; official thinking output guidance is 262,144 tokens, the suite keeps 16K/4K caps | [official card](https://huggingface.co/Qwen/Qwen3.8-27B) |
 | Nemotron 3.5 Lightning 30B-A3B | `1/.95/0` | `enable_thinking` follows the suite category gate; embedded MTP | Up to 1M context; the suite uses 16K and does not claim local 1M feasibility | [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
 | North Mini Code 1.0 | `1/.95/0` | Interleaved thinking should remain enabled and carried between agent turns; JSON-schema tools | 256K context, 64K maximum output; official simple generation example uses 1,024 | [official card](https://huggingface.co/CohereLabs/North-Mini-Code-1.0) |
 
-Retired challenger presets (LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer) are specified
-below so a future rerun does not rediscover them. Qwen3.8-27B and Nemotron stay in
-`CHALLENGERS` until a rerun on the corrected budget (derived article cap plus
-`REQUEST_TIMEOUT` 1800s). Fara1.5-4B is also below, but it is rerun separately
+Retired challenger presets (Qwen3.8-27B, LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer) are specified
+below so a future rerun does not rediscover them. Nemotron stays in `CHALLENGERS`
+pending a rerun on the corrected budget (derived article cap plus `REQUEST_TIMEOUT`
+1800s); Qwen3.8-27B was retired on 2026-08-23 and its preset moved into that list. Fara1.5-4B is also below, but it is rerun separately
 from the text sweep.
 
 ## Researched challenger presets
@@ -159,10 +158,15 @@ local verdicts are retained so a future rerun does not have to rediscover them.
   58s then `api error: HTTPError`, later requests 0.01-0.11s, no response body
   stored. Direct: 53/66 real wrong answers, 1.8 tok/s. Recheck with HTTP body
   logging before judging the model.
+- **Retired from `CHALLENGERS` 2026-08-23, on speed alone.** The preset stays here
+  because it was verified against the card and nothing about it was wrong.
 - Cold llama-bench 2026-08-22 (build 10380, idle machine): tg128 1.46 tok/s, 1.19 at
   depth 3072, pp512 40.21. The suite's 2.6 tok/s was therefore real, not contention.
   At that speed a 12,288-token article answer needs over two hours, so this config
   cannot finish the agent scenario within any sane unattended budget on this machine.
+  Everything tried against it: a newer llama.cpp (PR-27342) lifts decode to 3.31, and a
+  DFlash2 draft makes it 40% slower rather than faster (4 of 4 rounds, mean -1.244 tok/s),
+  because speculative decoding needs the batched path that is exactly what is broken here.
   Resolved 2026-08-23: it is the runtime, not the model. Under MLX the two are
   indistinguishable, while stock llama.cpp 10380 separates them by 3.5x (Qwen3.6 5.17
   tok/s against Qwen3.8's 1.46), and a newer master recovers Qwen3.8 to 3.31. Even so,

@@ -41,7 +41,7 @@ help choose a local model are excluded from current reruns:
 
 | Status | Models | Reason |
 |--------|--------|--------|
-| Current challenger recheck | Qwen3.8-27B, Nemotron 3.5 Lightning | Previous agent-scenario snapshots are not quality verdicts; rerun on the corrected budget (derived article cap, `REQUEST_TIMEOUT` 1800s) |
+| Current challenger recheck | Nemotron 3.5 Lightning | Its 2026-08-18 fails were 300s request timeouts, not wrong answers; rerun on the corrected budget (derived article cap, `REQUEST_TIMEOUT` 1800s) |
 | Separate multimodal track | Fara1.5-4B | Requires screenshots, browser actions, and irreversible-action checks |
 | Agentic text only | North Mini Code | Accurate on the old text core, does not beat Mellum2; keep for tool-use measurement |
 | Retired from reruns | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 9B/35B; Agents-A1 4B; LFM2.5-2.6B; Nanbeige4.2-3B; Muse Glimmer 30B | Duplicated a stronger speed/accuracy point, or consumed too much time for a text-only result |
@@ -64,7 +64,7 @@ limit, upstream llama.cpp support, and the vendor's recommended inference settin
 | [Nanbeige4.2-3B](https://huggingface.co/Nanbeige/Nanbeige4.2-3B) | Thinking timed out on consistency and long-context; direct mode missed contradiction pairs. Retired; see the [verified presets](docs/configuration.md#nanbeige42-3b). |
 | [Fara1.5-4B](https://huggingface.co/microsoft/Fara1.5-4B) | Upstream llama.cpp passed a safe synthetic browser smoke, but this is not an end-to-end reliability result. Evaluate through the official agent harness; see the [runtime and preset record](docs/configuration.md#fara15-4b). |
 | [North Mini Code 1.0](https://huggingface.co/blog/CohereLabs/introducing-north-mini-code) | Accurate on the old text core, does not beat Mellum2. Stays on the agentic track. |
-| [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Keep as challenger. Official think/direct sampling and `xhigh` effort match the card. The 0/66 think snapshot is a harness HTTPError with no body, not a model score. See the [preset](docs/configuration.md#qwen38-27b). |
+| [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | **Retired 2026-08-23, on speed.** Sampling was never the problem; it decodes at 1.5-3.3 tok/s here, so one article answer runs past an hour. Neither a newer llama.cpp build nor a DFlash2 draft brings it into range, and the slowness is llama.cpp's, not the model's (MLX runs it at Qwen3.6 speed). Preset and measurements kept in the [preset](docs/configuration.md#qwen38-27b). |
 | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | Dominated on the 12-prompt core; 22-prompt rerun never finished. Retired; see the [verified preset](docs/configuration.md#muse-glimmer-30b). |
 | [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | Keep as challenger. Official sampling matches; local `Q3_K_M` is the memory-safe quant. Its fails have always been budget artifacts: 300s timeouts in the 2026-08-18 snapshot, then six `empty` results in the 2026-08-21 sweep, each exactly 4,096 tokens cut mid-thought. See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
 | [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny) | Next challenger once PATH llama-server includes BailingMoE3. 7.9B/1.3B, MacBook-oriented, Q8_0 cached and smoke-tested on build 10544. See the [preset](docs/configuration.md#ling-30-tiny). |
@@ -116,11 +116,6 @@ for repo, files in [
 ]:
     for f in files:
         hf_hub_download(repo, f)
-hf_hub_download(
-    'unsloth/Qwen3.8-27B-GGUF',
-    'Qwen3.8-27B-Q4_K_M.gguf',
-    revision='fdd03b8bbd279c1694563650e79d85a2373d9934',
-)
 "
 ```
 
@@ -182,8 +177,7 @@ nohup nice -n 10 caffeinate -dimu uv run python benchmark.py \
 disown
 ```
 
-This covers the six-config routine, both Qwen3.8-27B modes, Nemotron, and North Mini
-Code. Previous dominated challengers and the 25 historical configurations are retired
+This covers the six-config routine, Nemotron, and North Mini Code. Previous dominated challengers and the 25 historical configurations are retired
 from reruns. Before starting, the harness verifies every required GGUF and companion
 MTP head and exits with status 2 when an asset is missing. Outside a full sweep, absent
 main weights may still be skipped, but a downloaded config with a missing companion
@@ -250,10 +244,8 @@ on every request (server default may clip the tail).
 | Gemma 4 | 1.0 | 0.95 | 64 | - | [Gemma cards](https://ai.google.dev/gemma/docs/core) |
 | LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | [official model card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
 | Mellum2-12B | 0.6 | 0.95 | 20 | - | [official model card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
-| Qwen3.8-27B think | 1.0 | 0.95 | 20 | - | [official model card](https://huggingface.co/Qwen/Qwen3.8-27B) |
-| Qwen3.8-27B direct | 0.7 | 0.8 | 20 | presence 1.5 | [official model card](https://huggingface.co/Qwen/Qwen3.8-27B) |
 
-The exact researched presets for LFM2.5-2.6B, Nanbeige4.2-3B, and Fara1.5-4B,
+The exact researched presets for Qwen3.8-27B, LFM2.5-2.6B, Nanbeige4.2-3B, and Fara1.5-4B,
 including context, output, thinking, tool-template, and scenario controls, are recorded
 in [configuration notes](docs/configuration.md#researched-challenger-presets).
 
