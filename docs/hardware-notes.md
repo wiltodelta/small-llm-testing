@@ -110,12 +110,34 @@ same story: newer master fixes part of it.
 Absolute MLX numbers here swing (median 3.90 across the eight runs, range 3.34-6.87), so
 only the within-round pairing is trustworthy; the machine was not fully idle.
 
-**DFlash2: it runs, its throughput here is not yet measured.** PR #27342 is open, not
-merged, so it needs a source build (`cmake -DGGML_METAL=ON`, then `--model-draft`,
-`--spec-type draft-dflash`, `-ngld 99`). The draft loads and drafts: acceptance came out
-at 0.365-0.454 with a mean accepted run of 3.5-4.2 tokens, against the 5.39 acceptance
-length the model card reports on GSM8K. Passing the draft without `-ngld 99` measurably
-hurts. The throughput A/B is **inconclusive and must be redone on a quiet machine**: two
-identical no-draft runs minutes apart gave 5.16 and 2.94 tok/s, a spread wider than the
-effect being tested. Per the Ling-3.0-tiny precedent, do not add DFlash2 to `CHALLENGERS`
-until the project binary carries the merged PR.
+**DFlash2 runs and makes Qwen3.8-27B about 40% SLOWER on this machine.** PR #27342 is
+open, not merged, so it needs a source build (`cmake -DGGML_METAL=ON`, then
+`--model-draft`, `--spec-type draft-dflash`, `-ngld 99`; without `-ngld 99` it is worse
+still). Four rounds, order alternated between rounds so mode is not aliased with
+position, two 256-token generations per server instance:
+
+| Round | order | dflash2 | nodraft | diff |
+|---|---|---:|---:|---:|
+| 1 | nodraft first | 2.047 | 3.636 | -1.589 |
+| 2 | dflash2 first | 1.938 | 2.978 | -1.039 |
+| 3 | nodraft first | 1.995 | 3.113 | -1.118 |
+| 4 | dflash2 first | 1.885 | 3.114 | -1.229 |
+
+Slower in 4 of 4 rounds, one-sided sign test p = 0.062 (the floor at n=4), mean paired
+difference -1.244 tok/s. The draft is working as designed: acceptance 0.385-0.437, mean
+accepted run 3.7-4.1 of 7 drafted, against the card's 5.39 on GSM8K.
+
+**Why it loses here, and it is the same root cause as everything else on this page.**
+Speculative decoding trades one decode step for a batched verification of the drafted
+block, so it pays off only where the batched path is fast. On this model llama.cpp's
+batched path is the broken one: pp512 is 40 (stock) to 72 (PR build) tok/s, against 137
+for a larger MoE and 431 for Mellum2. DFlash2 therefore leans on the exact path that is
+slow, and the drafting cost is never recovered.
+
+Server CPU while generating was 18.2% mean without the draft and 6.1% with it, so the
+draft is not stealing CPU; the GPU-side verification is where it goes. External load
+swung from 28 to 139 across the run and the dflash2 arm barely moved (1.818-2.233),
+which is itself evidence the arm is bound by something other than machine contention.
+
+Per the Ling-3.0-tiny precedent, do not add DFlash2 to `CHALLENGERS`: it is behind an
+unmerged PR, and on this hardware it is a regression rather than a rescue.
