@@ -163,7 +163,9 @@ local verdicts are retained so a future rerun does not have to rediscover them.
   depth 3072, pp512 40.21. The suite's 2.6 tok/s was therefore real, not contention.
   At that speed a 12,288-token article answer needs over two hours, so this config
   cannot finish the agent scenario within any sane unattended budget on this machine.
-  Whether that is the model or llama.cpp build 10380 is unresolved; see
+  Resolved 2026-08-23: it is the model AND the build. Qwen3.6-27B on the same stock
+  binary does 5.17 tok/s, and Qwen3.8-27B on a newer master does 3.31. Even so, no
+  dense 27B on this machine is fast enough for the agent scenario; see
   [`hardware-notes.md`](hardware-notes.md).
 
 ### Nemotron 3.5 Lightning 30B-A3B

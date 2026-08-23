@@ -48,8 +48,8 @@ dense, against 137 for a larger MoE and 431 for Mellum2.
 **That does NOT establish anything about dense models.** The only comparator is this
 repo's own llama-bench on Qwen3.6-27B Q4_K_M, 6.32 tok/s tg128 -- but that was
 build 9380, and this is 10380. Model and build both differ, so the honest reading is
-"Qwen3.8-27B is unusable here at this build", not "dense 27B is unusable here". Settling
-which one it is needs Qwen3.6-27B re-measured on 10380.
+"Qwen3.8-27B is unusable here at this build", not "dense 27B is unusable here".
+**Settled the next day, and the answer is both** -- see "Model or build? Both" below.
 
 **Never quote the first tg reading after a model loads.** North Mini's first tg128 in the
 matrix read 3.56 tok/s. Three identical repeats afterwards gave 14.04 (+/- 5.07), then
@@ -60,3 +60,42 @@ consistent with that once thermal throttling is allowed for.
 **Depth is not what costs the MoEs.** At d3072 North Mini holds 15.37 and Mellum2 gains
 to 33.28, so serving the article does not by itself slow decode, and North Mini's raise
 from `-c 8192` to `n_ctx=16384` has no measured decode cost.
+
+## Model or build? Both. And MLX is not the rescue (2026-08-23)
+
+The 2026-08-22 note left open whether Qwen3.8-27B's 1.46 tok/s was the model or llama.cpp
+build 10380, because the only comparator (6.32 on Qwen3.6-27B) came from build 9380. Three
+runs settle it. All are `llama-bench`, suite flags, `-r 3`, same M5.
+
+| Run | Build | pp512 | tg128 |
+|---|---|---:|---:|
+| Qwen3.6-27B Q4_K_M | 10380 (stock) | 106.46 | **5.17 +/- 0.11** |
+| Qwen3.8-27B Q4_K_M | 10380 (stock) | 40.21 | **1.46 +/- 0.18** |
+| Qwen3.8-27B Q4_K_M | PR-27342 (`1deefcc`, newer master) | 72.11 | **3.31 +/- 0.08** |
+
+Qwen3.6 at d3072: pp 62.63, tg 3.26 +/- 0.03.
+
+**Both factors are real.** Same build, different model: 5.17 against 1.46, so Qwen3.8 is
+roughly 3.5x slower than its predecessor here. Same model, newer build: 1.46 against 3.31,
+so master has since more than doubled it. Neither alone explains the gap, and the earlier
+one-line reading ("dense 27B is a bad overnight worker") was wrong twice over: it blamed
+an architecture class for what is a model and a build.
+
+**What it does not change: the class is still too slow for this job.** The best dense-27B
+number on this machine is 5.17 tok/s, so a 12,288-token article answer needs about 40
+minutes per attempt, times three samples, times the prompt count.
+
+**MLX is not faster.** `mlx-community/Qwen3.6-27B-4bit` generated 256 tokens at 3.687
+tok/s with a 15.4 GB peak, against llama.cpp's 5.17 on the same model at Q4_K_M. So the
+bottleneck is not llama.cpp's Metal path. Caveats: single run, no repeats, and MLX 4-bit
+is not bit-identical to Q4_K_M, so read it as "same order, not faster", not as a ratio.
+
+**DFlash2: it runs, its throughput here is not yet measured.** PR #27342 is open, not
+merged, so it needs a source build (`cmake -DGGML_METAL=ON`, then `--model-draft`,
+`--spec-type draft-dflash`, `-ngld 99`). The draft loads and drafts: acceptance came out
+at 0.365-0.454 with a mean accepted run of 3.5-4.2 tokens, against the 5.39 acceptance
+length the model card reports on GSM8K. Passing the draft without `-ngld 99` measurably
+hurts. The throughput A/B is **inconclusive and must be redone on a quiet machine**: two
+identical no-draft runs minutes apart gave 5.16 and 2.94 tok/s, a spread wider than the
+effect being tested. Per the Ling-3.0-tiny precedent, do not add DFlash2 to `CHALLENGERS`
+until the project binary carries the merged PR.
