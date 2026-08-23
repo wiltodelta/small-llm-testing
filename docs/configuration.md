@@ -40,7 +40,9 @@ detects that file and adds `--model-draft`, `--spec-type draft-mtp`,
 decode and materially faster.
 
 A model whose server fails to start is logged and skipped rather than crashing the
-whole run. Pass `--port 8081` or another free port when the default port is occupied.
+whole run. The port itself is checked once before any model runs: if something is already
+listening, the harness exits with status 2 and names the holder rather than letting every
+config time out in turn. Pass `--port 8081` or another free port when that happens.
 
 `DEFAULT_SERVER_ARGS` applies:
 

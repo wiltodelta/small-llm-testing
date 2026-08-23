@@ -15,6 +15,10 @@
   kill it -- run the benchmark on the next free port: `benchmark.py --port 8081`.
   A server that times out during startup is terminated before the harness moves to the
   next config, so it cannot retain the port and cascade the failure through a full sweep.
+  Since 2026-08-23 the harness also probes the port once before any model runs and exits
+  with status 2 naming the holder, so an occupied port fails in a second instead of
+  burning `SERVER_STARTUP_TIMEOUT` per config. That is what it used to cost: a sweep on a
+  port held by another project skipped four models in 20 minutes before anyone looked.
 - OLMo 3.1 32B needs `--jinja` and a current llama.cpp. Build 9590 failed on its
   `tojson` filter; build 10090 loads the original template and serves valid completions.
 - Ling-3.0-tiny needs llama.cpp PR #26608 (BailingMoE3, build 10544+). PATH

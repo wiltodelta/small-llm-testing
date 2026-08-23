@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import re
+import socket
 import subprocess
 import sys
 import textwrap
@@ -20,6 +21,7 @@ from typing import TypedDict, cast
 
 log = logging.getLogger(__name__)
 
+LSOF = "/usr/sbin/lsof"  # absolute: the port probe must not depend on PATH
 LLAMA_SERVER = "/opt/homebrew/bin/llama-server"
 API_URL = "http://127.0.0.1:{port}/v1/chat/completions"
 HEALTH_URL = "http://127.0.0.1:{port}/health"
@@ -992,6 +994,34 @@ def _is_model_downloaded(model: ModelConfig) -> bool:
     return _resolve_model_path(model) is not None
 
 
+def _port_holder(port: int) -> str | None:
+    """Return a description of whatever already listens on `port`, or None if it is free.
+
+    A busy port is the one startup failure the harness cannot recover from: every server
+    then times out after SERVER_STARTUP_TIMEOUT and every model is skipped, so a full
+    sweep spends 300s per config to produce nothing. Checking once up front turns that
+    into an immediate exit naming the holder.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1)
+        if probe.connect_ex(("127.0.0.1", port)) != 0:
+            return None
+    try:
+        out = (
+            subprocess.run(
+                [LSOF, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown process"
+    return out[1] if len(out) > 1 else "unknown process"
+
+
 def _missing_model_assets(
     models: Iterable[ModelConfig],
     *,
@@ -1603,6 +1633,12 @@ def main() -> None:
     snapshot_tag = None
     if not complete_prompt_set:
         snapshot_tag = "-".join(sorted({prompt.category for prompt in selected_prompts}))
+    holder = _port_holder(args.port)
+    if holder is not None:
+        log.error("Port %d is already in use; every server would time out. Holder: %s", args.port, holder)
+        log.error("Rerun on a free port, e.g. --port %d. Do not kill a holder that is not ours.", args.port + 1)
+        raise SystemExit(2)
+
     missing = _missing_model_assets(models, require_weights=args.full_sweep)
     if missing:
         scope = "Full sweep" if args.full_sweep else "Selected models"

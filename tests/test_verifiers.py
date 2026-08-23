@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 import urllib.error
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ from benchmark import (
     ModelConfig,
     SamplingPreset,
     _missing_model_assets,
+    _port_holder,
     _run_one_attempt,
     _select_models,
     _strip_think,
@@ -416,6 +418,13 @@ def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(benchmark, "_parse_args", Args)
     monkeypatch.setattr(benchmark, "_missing_model_assets", no_missing_assets)
+
+    # main() probes the port for real; pin it free so the test does not depend on
+    # whatever happens to be listening on this machine.
+    def free_port(_port: int) -> str | None:
+        return None
+
+    monkeypatch.setattr(benchmark, "_port_holder", free_port)
     monkeypatch.setattr(benchmark, "run_benchmark", no_results)
     monkeypatch.setattr(benchmark, "_save_json", save_json)
     monkeypatch.setattr(benchmark, "_save_markdown", save_markdown)
@@ -678,3 +687,20 @@ class TestFailKind:
     )
     def test_classification(self, reason: str, expected: str) -> None:
         assert fail_kind(reason) == expected
+
+
+class TestPortHolder:
+    def test_free_port_returns_none(self) -> None:
+        # Bind and release so the port is known-free at probe time.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        assert _port_holder(port) is None
+
+    def test_busy_port_is_reported(self) -> None:
+        # A busy port made a 2026-08-23 full sweep skip every model, 300s at a time.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+            port = s.getsockname()[1]
+            assert _port_holder(port) is not None
