@@ -16,7 +16,6 @@ Measured 2026-08-21 on Apple M5, 32 GB, with f16 KV.
 |---|---|---|---:|---:|---:|---|
 | [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 65/66 | 765s | 29.9 | Compact reasoning |
 | [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | direct | 47/66 | 103s | 30.1 | Maximum compact-model throughput |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | think | 63/66 | 1758s | 17.5 | Fast MoE reasoning |
 | [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 64/66 | 88s | 19.7 | Low-latency near-perfect answers |
 | [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Q8_0 | native | 63/66 | 706s | 29.9 | Small active-parameter MoE |
 | [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 66/66 | 473s | 26.8 | Background wiki-audit agent |
@@ -41,9 +40,7 @@ help choose a local model are excluded from current reruns:
 
 | Status | Models | Reason |
 |--------|--------|--------|
-| Current challenger recheck | Nemotron 3.5 Lightning | Its 2026-08-18 fails were 300s request timeouts, not wrong answers; rerun on the corrected budget (derived article cap, `REQUEST_TIMEOUT` 1800s) |
 | Separate multimodal track | Fara1.5-4B | Requires screenshots, browser actions, and irreversible-action checks |
-| Agentic text only | North Mini Code | Accurate on the old text core, does not beat Mellum2; keep for tool-use measurement |
 | Retired from reruns | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 9B/35B; Agents-A1 4B; LFM2.5-2.6B; Nanbeige4.2-3B; Muse Glimmer 30B | Duplicated a stronger speed/accuracy point, or consumed too much time for a text-only result |
 | Recheck only after runtime fixes | Laguna-XS-2.1; Ling-3.0-tiny | Laguna: Metal overflow. Ling: GGUF cached and loaded on llama.cpp 10544, but PATH `llama-server` is still `llama-cpp-bundled` 10380 |
 | Runtime-incompatible | Bonsai 27B, ZAYA1-8B | Require a custom runtime rather than the common upstream llama.cpp build |
@@ -63,10 +60,10 @@ limit, upstream llama.cpp support, and the vendor's recommended inference settin
 | [LFM2.5-2.6B](https://huggingface.co/LiquidAI/LFM2.5-2.6B) | Accurate on the agent-scenario suite but dominated by Gemma 4 E2B thinking. Retired; see the [verified preset](docs/configuration.md#lfm25-26b). |
 | [Nanbeige4.2-3B](https://huggingface.co/Nanbeige/Nanbeige4.2-3B) | Thinking timed out on consistency and long-context; direct mode missed contradiction pairs. Retired; see the [verified presets](docs/configuration.md#nanbeige42-3b). |
 | [Fara1.5-4B](https://huggingface.co/microsoft/Fara1.5-4B) | Upstream llama.cpp passed a safe synthetic browser smoke, but this is not an end-to-end reliability result. Evaluate through the official agent harness; see the [runtime and preset record](docs/configuration.md#fara15-4b). |
-| [North Mini Code 1.0](https://huggingface.co/blog/CohereLabs/introducing-north-mini-code) | Accurate on the old text core, does not beat Mellum2. Stays on the agentic track. |
+| [North Mini Code 1.0](https://huggingface.co/blog/CohereLabs/introducing-north-mini-code) | **Retired 2026-08-23, as a harness mismatch.** It does not terminate on the article containing no contradiction, burning the whole budget at 4,096 and again at 12,288 tokens, and its card asks for interleaved thinking carried between turns, which a single-call suite cannot give it. |
 | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | **Retired 2026-08-23, on speed.** Sampling was never the problem; it decodes at 1.5-3.3 tok/s here, so one article answer runs past an hour. Neither a newer llama.cpp build nor a DFlash2 draft brings it into range, and the slowness is llama.cpp's, not the model's (MLX runs it at Qwen3.6 speed). Preset and measurements kept in the [preset](docs/configuration.md#qwen38-27b). |
 | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | Dominated on the 12-prompt core; 22-prompt rerun never finished. Retired; see the [verified preset](docs/configuration.md#muse-glimmer-30b). |
-| [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | Keep as challenger. Official sampling matches; local `Q3_K_M` is the memory-safe quant. Its fails have always been budget artifacts: 300s timeouts in the 2026-08-18 snapshot, then six `empty` results in the 2026-08-21 sweep, each exactly 4,096 tokens cut mid-thought. See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
+| [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | **Retired 2026-08-23, on long-context accuracy.** 2347s for 3/9 long context, the worst in the fleet, in the one category this suite exists to measure. Its earlier fails were budget artifacts and the budget is now fixed; the score is not. See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
 | [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny) | Next challenger once PATH llama-server includes BailingMoE3. 7.9B/1.3B, MacBook-oriented, Q8_0 cached and smoke-tested on build 10544. See the [preset](docs/configuration.md#ling-30-tiny). |
 | [Ornith-1.5-9B](https://huggingface.co/ornith-ai/Ornith-1.5-9B) | Official GGUF, 9.53 GB Q8_0. Successor to retired Ornith 1.0. One-at-a-time after Ling. |
 | [LFM2.5-1.2B-Thinking](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking) | Smaller than the already-dominated 2.6B. Skip. |
@@ -135,7 +132,7 @@ uv run python benchmark.py
 # Run the routine set plus all current text challengers
 uv run python benchmark.py --include-challengers
 
-# Run all 10 current text configurations
+# Run every current text configuration
 uv run python benchmark.py --full-sweep
 
 # If port 8080 is taken (e.g. another dev server), run on the next free port:
@@ -169,7 +166,7 @@ nohup caffeinate -dimu uv run python benchmark.py > /tmp/bench.log 2>&1 &
 disown
 ```
 
-For an unattended low-priority remeasurement of all 10 current text configurations:
+For an unattended low-priority remeasurement of every current text configuration:
 
 ```bash
 nohup nice -n 10 caffeinate -dimu uv run python benchmark.py \
@@ -177,14 +174,13 @@ nohup nice -n 10 caffeinate -dimu uv run python benchmark.py \
 disown
 ```
 
-This covers the six-config routine, Nemotron, and North Mini Code. Previous dominated challengers and the 25 historical configurations are retired
+This covers the five-config routine. Previous dominated challengers and the historical configurations are retired
 from reruns. Before starting, the harness verifies every required GGUF and companion
 MTP head and exits with status 2 when an asset is missing. Outside a full sweep, absent
 main weights may still be skipped, but a downloaded config with a missing companion
 aborts instead of silently running a different preset. Completed configs are saved only
-to their per-model snapshots; the canonical aggregate is replaced only after all 10
-configs finish, so a
-server failure cannot publish a partial comparison.
+to their per-model snapshots; the canonical aggregate is replaced only after every
+config finishes, so a server failure cannot publish a partial comparison.
 
 Do not start Fara1.5-4B with this command. It is a multimodal browser agent with a
 separate screenshot/action evaluation path, not a member of the text suite.

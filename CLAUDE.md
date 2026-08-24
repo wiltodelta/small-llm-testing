@@ -14,7 +14,7 @@ uv sync
 # Run the curated routine benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
-# Add current challengers, or run all 10 current text configurations
+# Add current challengers, or run every current text configuration
 uv run python benchmark.py --include-challengers
 uv run python benchmark.py --full-sweep
 

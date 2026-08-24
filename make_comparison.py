@@ -34,12 +34,6 @@ QUICK_CHOICES = {
         "direct",
         "Maximum compact-model throughput",
     ),
-    "gemma-4-26b-a4b-Q4_K_M-think": (
-        "Gemma 4 26B-A4B",
-        "UD-Q4_K_M + MTP",
-        "think",
-        "Fast MoE reasoning",
-    ),
     "gemma-4-26b-a4b-Q4_K_M-nothink": (
         "Gemma 4 26B-A4B",
         "UD-Q4_K_M + MTP",

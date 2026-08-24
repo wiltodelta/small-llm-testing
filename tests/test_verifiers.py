@@ -70,7 +70,6 @@ def test_default_model_set_is_curated() -> None:
     assert {model.name for model in MODELS} == {
         "gemma-4-e2b-Q8_0-think",
         "gemma-4-e2b-Q8_0-nothink",
-        "gemma-4-26b-a4b-Q4_K_M-think",
         "gemma-4-26b-a4b-Q4_K_M-nothink",
         "lfm2.5-8b-a1b-Q8_0",
         "mellum2-12b-a2.5b-think-Q4_K_M",
@@ -78,15 +77,14 @@ def test_default_model_set_is_curated() -> None:
 
 
 def test_challenger_model_set_is_explicit() -> None:
-    assert {model.name for model in CHALLENGERS} == {
-        "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
-    }
+    # Empty since 2026-08-23; the machinery stays for the next challenger.
+    assert CHALLENGERS == []
     assert len(CURRENT_TEXT_MODELS) == len(MODELS) + len(CHALLENGERS)
 
 
 def test_full_sweep_model_set_is_explicit_and_unique() -> None:
-    assert {model.name for model in AGENTIC_TEXT_MODELS} == {"north-mini-code-1.0-Q4_K_M"}
-    assert len(FULL_SWEEP_MODELS) == 8
+    assert AGENTIC_TEXT_MODELS == []
+    assert len(FULL_SWEEP_MODELS) == 5
     assert len({model.name for model in FULL_SWEEP_MODELS}) == len(FULL_SWEEP_MODELS)
 
 
@@ -129,17 +127,10 @@ def test_select_models_filter_excludes_retired_models_and_searches_agentic_set()
     assert _select_models("lfm2.5-2.6b", include_challengers=False) == []
     # Retired 2026-08-23: too slow to finish an article answer on this machine.
     assert _select_models("qwen3.8", include_challengers=False) == []
-    assert [model.name for model in _select_models("nemotron", include_challengers=False)] == [
-        "nemotron-3.5-lightning-30b-a3b-Q3_K_M",
-    ]
-    assert _select_models("north-mini", include_challengers=False) == AGENTIC_TEXT_MODELS
-
-
-def test_nemotron_uses_embedded_mtp() -> None:
-    selected = _select_models("nemotron-3.5", include_challengers=False)
-    assert len(selected) == 1
-    assert selected[0].server_args == ("--spec-type", "draft-mtp")
-    assert selected[0].top_k == 0
+    # Both retired 2026-08-23: Nemotron on long-context accuracy, North Mini as a
+    # harness mismatch (it never terminates on the no-contradiction article).
+    assert _select_models("nemotron", include_challengers=False) == []
+    assert _select_models("north-mini", include_challengers=False) == []
 
 
 def test_missing_model_assets_deduplicates_shared_weight(

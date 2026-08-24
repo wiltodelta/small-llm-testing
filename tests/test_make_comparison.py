@@ -89,7 +89,8 @@ class TestQuickChoice:
         assert "Measured 2026-07-30 on Apple M5, 32 GB, with f16 KV." in rendered
         assert "| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) |" in rendered
         assert "| Q8_0 + MTP | think | 30/36 | 13s | 34.6 | Compact reasoning |" in rendered
-        assert "| Q4_K_M | native think | 35/36 | 13s | 34.6 |" in rendered
+        # Mellum2 is the last of the five curated configs, so index 30 + 4.
+        assert "| Q4_K_M | native think | 34/36 | 13s | 34.6 |" in rendered
 
     def test_rejects_incomplete_benchmark(self) -> None:
         with pytest.raises(ValueError, match="missing curated configs"):

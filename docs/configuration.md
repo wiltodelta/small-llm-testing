@@ -5,14 +5,21 @@ ever measured. A regression test pins its literal names so a broad experimental 
 cannot silently become the default again. Historical results and the retirement policy
 are documented in the README.
 
-`CHALLENGERS` is Nemotron 3.5 Lightning. Qwen3.8-27B was retired on 2026-08-23 for speed; its preset and the measurements are kept below.
-The 2026-08-18 agent-scenario snapshots are not quality verdicts: Qwen thinking
-recorded a bare `HTTPError` with no response body, and Nemotron's fails were
-300-second request timeouts on thinking prompts. `--include-challengers` runs
-`MODELS + CHALLENGERS`. `AGENTIC_TEXT_MODELS` contains North Mini Code.
-`--full-sweep` runs all 10 current text configurations, and an explicit `--model` filter
-searches those collections. Historical dominated models are intentionally not selectable.
-Fara remains outside them because its evaluation requires screenshots and browser actions.
+`CHALLENGERS` and `AGENTIC_TEXT_MODELS` are both empty since 2026-08-23. The machinery
+stays for the next candidate; `--include-challengers` and `--full-sweep` therefore run
+the curated five today. Four configs were dropped that day, each for cost against what it
+still had left to say, and their presets and measurements are kept below:
+
+| Dropped | Why |
+|---|---|
+| Qwen3.8-27B (think + direct) | 1.5-3.3 tok/s; one article answer runs past an hour |
+| Nemotron 3.5 Lightning 30B-A3B | 2347s for 3/9 long context, the worst in the fleet, in the one category this suite exists to measure |
+| North Mini Code 1.0 | Harness mismatch, not just 1645s: it never terminates on the article with no contradiction, at 4096 or at 12288 tokens, and its card asks for interleaved thinking carried between turns |
+| Gemma 4 26B-A4B think | 2505s against its own direct sibling's 67s, for a lower score (64/66 vs 65/66) and a lower agent score (25/27 vs 27/27) |
+
+An explicit `--model` filter searches the curated set; historical dominated models are
+intentionally not selectable. Fara stays outside all of these because its evaluation
+requires screenshots and browser actions.
 
 Each `ModelConfig` defines:
 

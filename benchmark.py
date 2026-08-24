@@ -103,11 +103,19 @@ def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[M
 
 MODELS: list[ModelConfig] = [
     # Curated routine core from the 2026-07-29 full run. Gemma E2B is the compact
-    # speed/accuracy reference; 26B-A4B is the fast interactive MoE reference. Each runs
-    # a think + nothink pair so the mode tradeoff remains visible. Unsloth's separate
-    # `mtp-*.gguf` draft heads are auto-attached by _start_server for lossless MTP.
+    # speed/accuracy reference and keeps its think + nothink pair, which is where the
+    # mode tradeoff is read (design doc: never judge a toggle from the aggregate).
+    # Unsloth's separate `mtp-*.gguf` draft heads are auto-attached for lossless MTP.
     *_gemma_pair("gemma-4-e2b-Q8_0", "unsloth/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf"),
-    *_gemma_pair("gemma-4-26b-a4b-Q4_K_M", "unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"),
+    # 26B-A4B runs direct only. Its thinking config was dropped 2026-08-23: 2505s against
+    # this one's 67s, for a lower score (64/66 vs 65/66) and a lower agent score
+    # (25/27 vs a clean 27/27). A config beaten by its own sibling on every axis while
+    # costing 37x the wall time has nothing left to measure.
+    ModelConfig(
+        name="gemma-4-26b-a4b-Q4_K_M-nothink",
+        hf="unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        thinking=False,
+    ),
     # Compact MoE alternatives: LFM is the 1.5B-active edge reference; Mellum2 is the
     # coding/reasoning leader from the full run.
     ModelConfig(
@@ -127,37 +135,19 @@ MODELS: list[ModelConfig] = [
     ),
 ]
 
-# Nemotron is here because its 2026-08-18 fails were 300s request timeouts on thinking,
-# not wrong answers, and the budget that caused them has since been fixed. Qwen3.8-27B was
-# retired on 2026-08-23: it decodes at 1.5-3.3 tok/s here, so one article answer runs past
-# an hour, and neither a newer llama.cpp nor a DFlash2 draft brings it into range. Its
-# verified preset and the measurements are kept in docs/configuration.md. Use --full-sweep
-# to add North Mini Code, or --model to select one config directly.
-CHALLENGERS: list[ModelConfig] = [
-    ModelConfig(
-        name="nemotron-3.5-lightning-30b-a3b-Q3_K_M",
-        hf=("bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q3_K_M.gguf"),
-        temperature=1.0,
-        top_p=0.95,
-        top_k=0,
-        server_args=("--spec-type", "draft-mtp"),
-    ),
-]
+# Empty since 2026-08-23. Nemotron 3.5 Lightning was the last entry and was dropped for
+# the same reason as Qwen3.8: 2347s for the worst long-context score in the fleet (3/9,
+# six answers cut off), which is the one category this suite exists to measure. Retired
+# presets and their measurements live in docs/configuration.md. Use --full-sweep to add
+# the agentic set, or --model to select one config directly.
+CHALLENGERS: list[ModelConfig] = []
 
-AGENTIC_TEXT_MODELS: list[ModelConfig] = [
-    ModelConfig(
-        name="north-mini-code-1.0-Q4_K_M",
-        hf="unsloth/North-Mini-Code-1.0-GGUF:North-Mini-Code-1.0-UD-Q4_K_M.gguf",
-        temperature=1.0,
-        top_p=0.95,
-        top_k=0,
-        # 8192 was a memory guess carried over from the 16 GB machine and it capped the
-        # whole fleet's article budget. Verified 2026-08-21 on this M5 (24.96 GB working
-        # set): the UD-Q4_K_M weights load at -c 16384 and serve. The card documents 256K
-        # context and 64K output, so 16384 is still a local memory bound, not the model's.
-        n_ctx=16384,
-    )
-]
+# Empty since 2026-08-23. North Mini Code was dropped as a harness mismatch, not just for
+# its 1645s: it does not terminate on the article that contains no contradiction, burning
+# the whole budget and returning nothing (measured at both 4096 and 12288 tokens), and its
+# card asks for interleaved thinking carried between turns, which a single-call suite
+# cannot provide.
+AGENTIC_TEXT_MODELS: list[ModelConfig] = []
 
 CURRENT_TEXT_MODELS: tuple[ModelConfig, ...] = (*MODELS, *CHALLENGERS)
 FULL_SWEEP_MODELS: tuple[ModelConfig, ...] = (
