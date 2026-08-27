@@ -10,28 +10,29 @@ generation on long responses; suite time also captures how much reasoning each m
 emits, so use both when choosing an interactive model.
 
 <!-- BEGIN GENERATED QUICK CHOICE -->
-Measured 2026-08-21 on Apple M5, 32 GB, with f16 KV.
+Measured 2026-08-26 on Apple M5, 32 GB, with f16 KV.
 
 | Model | Quant | Mode | Score | Suite time | tok/s | Choose it for |
 |---|---|---|---:|---:|---:|---|
-| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 65/66 | 765s | 29.9 | Compact reasoning |
-| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | direct | 47/66 | 103s | 30.1 | Maximum compact-model throughput |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 64/66 | 88s | 19.7 | Low-latency near-perfect answers |
-| [LFM2.5-8B-A1B](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF) | Q8_0 | native | 63/66 | 706s | 29.9 | Small active-parameter MoE |
-| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 66/66 | 473s | 26.8 | Background wiki-audit agent |
+| [Gemma 4 E2B](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) | Q8_0 + MTP | think | 65/66 | 405s | 61.0 | Compact reasoning |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | UD-Q4_K_M + MTP | direct | 64/66 | 66s | 26.6 | Low-latency near-perfect answers |
+| [Mellum2-12B-A2.5B](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M) | Q4_K_M | native think | 66/66 | 527s | 45.2 | Background wiki-audit agent |
 <!-- END GENERATED QUICK CHOICE -->
 
 See the [full comparison](results/COMPARISON.md) for every measured configuration and
 the [raw benchmark data](results/benchmark.json) for reproducibility. Long sequential
-runs thermally throttle this Mac, so suite `tok/s` is best for relative comparison;
-measure peak decode speed with `llama-bench` on a cool machine.
+runs thermally throttle this Mac, so suite `tok/s` is best for relative comparison. The
+harness automatically waits before each model until the one-minute load stays below 4.0
+for two consecutive 30-second checks. Measure peak decode speed separately with
+`llama-bench` on a cool machine.
 
 ## Default routine set
 
-The six configurations in the quick-choice table are the default run. Gemma runs in
-both thinking and direct mode, with its separate `mtp-*.gguf` draft head auto-attached
-for lossless speculative decoding. LFM and Mellum each run once using their documented
-default behavior.
+The three configurations in the quick-choice table are the default run. They are the
+measured Pareto set for the background data-auditing target: Mellum2 and Gemma 26B direct
+each scored 36/36 on structured, consistency, and long-context attempts, while Gemma E2B
+thinking scored 35/36 as the compact option. Gemma's separate `mtp-*.gguf` draft heads
+are auto-attached for lossless speculative decoding.
 
 ### Future benchmark policy
 
@@ -40,20 +41,23 @@ help choose a local model are excluded from current reruns:
 
 | Status | Models | Reason |
 |--------|--------|--------|
-| Separate multimodal track | Fara1.5-4B | Requires screenshots, browser actions, and irreversible-action checks |
-| Retired from reruns | Gemma E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1; OLMo 3.1; Ornith 9B/35B; Agents-A1 4B; LFM2.5-2.6B; Nanbeige4.2-3B; Muse Glimmer 30B | Duplicated a stronger speed/accuracy point, or consumed too much time for a text-only result |
-| Recheck only after runtime fixes | Laguna-XS-2.1; Ling-3.0-tiny | Laguna: Metal overflow. Ling: GGUF cached and loaded on llama.cpp 10544, but PATH `llama-server` is still `llama-cpp-bundled` 10380 |
+| Historical multimodal track | Fara1.5-4B | GUI control is outside the unattended text-auditing target; preset retained, local weights removed |
+| Retired from reruns | Gemma E2B direct, E4B, 12B, 31B; Qwen 3.5 and 3.6; Ministral 3; GLM-4.7-Flash; Granite 4.1 and 4.2 8B; OLMo 3.1; Ornith 9B/35B; Agents-A1 4B; LFM2.5-8B-A1B and 2.6B; Nanbeige4.2-3B; Muse Glimmer 30B; Ling-3.0-tiny | Duplicated a stronger target-accuracy/resource point, or consumed too much time for a text-only result |
+| Current challengers | None | New candidates must clear research and runtime gates before joining a sweep |
+| Recheck only after runtime fixes | Laguna-XS-2.1 | Metal overflow |
 | Runtime-incompatible | Bonsai 27B, ZAYA1-8B | Require a custom runtime rather than the common upstream llama.cpp build |
 | Too slow or obsolete | Phi-4-Reasoning 15B, Phi-4-mini | Poor local latency or no longer a useful generation comparison |
 
-New models enter as one challenger at a time. They join the routine set only when the
-same local complete-suite run adds a useful Pareto point or a capability the existing
-text core does not measure.
+Challengers join the routine set only when the same local complete-suite run adds a
+useful Pareto point or a capability the existing text core does not measure. Granite
+low effort failed that gate at 62/66 in 240s. The current sweep is the three routine
+configs; Mellum uses the locally selected 6,144-token reasoning budget.
 
 ### Latest model search
 
-The 2026-08-20 search used the Hugging Face API against the machine's working-set
-limit, upstream llama.cpp support, and the vendor's recommended inference settings:
+The search was refreshed on 2026-08-25 through the Hugging Face API against the
+machine's working-set limit, upstream llama.cpp support, and the vendor's recommended
+inference settings:
 
 | Model | Decision |
 |-------|----------|
@@ -64,8 +68,12 @@ limit, upstream llama.cpp support, and the vendor's recommended inference settin
 | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | **Retired 2026-08-23, on speed.** Sampling was never the problem; it decodes at 1.5-3.3 tok/s here, so one article answer runs past an hour. Neither a newer llama.cpp build nor a DFlash2 draft brings it into range, and the slowness is llama.cpp's, not the model's (MLX runs it at Qwen3.6 speed). Preset and measurements kept in the [preset](docs/configuration.md#qwen38-27b). |
 | [Muse Glimmer 30B](https://huggingface.co/meta-models/Muse-Glimmer-30B) | Dominated on the 12-prompt core; 22-prompt rerun never finished. Retired; see the [verified preset](docs/configuration.md#muse-glimmer-30b). |
 | [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) | **Retired 2026-08-23, on long-context accuracy.** 2347s for 3/9 long context, the worst in the fleet, in the one category this suite exists to measure. Its earlier fails were budget artifacts and the budget is now fixed; the score is not. See the [preset](docs/configuration.md#nemotron-35-lightning-30b-a3b). |
-| [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny) | Next challenger once PATH llama-server includes BailingMoE3. 7.9B/1.3B, MacBook-oriented, Q8_0 cached and smoke-tested on build 10544. See the [preset](docs/configuration.md#ling-30-tiny). |
-| [Ornith-1.5-9B](https://huggingface.co/ornith-ai/Ornith-1.5-9B) | Official GGUF, 9.53 GB Q8_0. Successor to retired Ornith 1.0. One-at-a-time after Ling. |
+| [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny) | **Retired 2026-08-26.** Direct scored 12/27; bounded thinking scored 26/27 in 1,460s and still exhausted its reasoning budget. Mellum was both faster and more accurate. The local Q8_0 was removed; the [preset and verdict](docs/configuration.md#ling-30-tiny) remain. |
+| [Granite-4.2-8B](https://huggingface.co/ibm-granite/granite-4.2-8b) | **Retired 2026-08-26 after the complete sweep.** Low effort scored 62/66 in 240s, including 0/3 on `logic_syllogism_no`; direct scored 14/27 and bounded full thinking took 5,325s for 26/27 in the configuration screen. The local Q8_0 was removed; see the [measured preset](docs/configuration.md#granite-42). |
+| [Granite-4.2-3B](https://huggingface.co/ibm-granite/granite-4.2-3b) | Compact follow-up only if the 8B result leaves a useful question. Its Q8_0 is 3.89 GB, but running both before the 8B verdict would violate the one-challenger-at-a-time policy. |
+| [Granite-4.2-30B](https://huggingface.co/ibm-granite/granite-4.2-30b) | Skip locally. The 18.03 GB Q4_K_M is a dense 29.3B model and is unlikely to improve the speed/resource choice over the already measured Gemma 26B direct config. |
+| [Ornith-1.5-9B](https://huggingface.co/ornith-ai/Ornith-1.5-9B) | Official GGUF, 9.53 GB Q8_0. Successor to retired Ornith 1.0. Keep behind Granite 4.2 8B because Granite documents direct training for structured output and agentic workflows, the benchmark's target. |
+| Qwen3.8-Flash-Next | Do not download from community mirrors. No public official model card or API record was accessible on 2026-08-25, so its identity, inference preset, and release status could not be verified from the vendor source. |
 | [LFM2.5-1.2B-Thinking](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking) | Smaller than the already-dominated 2.6B. Skip. |
 | [Ling-3.0-flash](https://huggingface.co/inclusionAI/Ling-3.0-flash) | 124B-A5.1B, far beyond the working set. |
 | [Laguna S 2.1](https://huggingface.co/poolside/Laguna-S-2.1) | Do not download on this machine. The official 118B-A8B model's smallest published upstream GGUF is 96 GB, far beyond the working set. |
@@ -89,10 +97,10 @@ Use a recent build (≥ 9580): the `mellum` architecture used by Mellum2 was add
 [PR #23966](https://github.com/ggml-org/llama.cpp/pull/23966) (merged 2026-06-02). Older
 builds fail to start its server with `unknown model architecture: 'mellum'`.
 
-Ling-3.0-tiny needs a build containing
+Historical Ling-3.0-tiny reruns need a build containing
 [PR #26608](https://github.com/ggml-org/llama.cpp/pull/26608) (BailingMoE3, merged
-2026-08-17, build 10544+). PATH `llama-server` on this machine is still
-`llama-cpp-bundled` 10380 and cannot load it. See [troubleshooting](docs/troubleshooting.md).
+2026-08-17, build 10544+). Ling is no longer in the active set and its weights are not
+cached. See [troubleshooting](docs/troubleshooting.md).
 
 ## Download models first
 
@@ -106,10 +114,7 @@ from huggingface_hub import hf_hub_download
 for repo, files in [
     ('unsloth/gemma-4-E2B-it-GGUF', ['gemma-4-E2B-it-Q8_0.gguf', 'mtp-gemma-4-E2B-it.gguf']),
     ('unsloth/gemma-4-26B-A4B-it-GGUF', ['gemma-4-26B-A4B-it-UD-Q4_K_M.gguf', 'mtp-gemma-4-26B-A4B-it.gguf']),
-    ('LiquidAI/LFM2.5-8B-A1B-GGUF', ['LFM2.5-8B-A1B-Q8_0.gguf']),
     ('JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M', ['Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf']),
-    ('bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF', ['NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q3_K_M.gguf']),
-    ('unsloth/North-Mini-Code-1.0-GGUF', ['North-Mini-Code-1.0-UD-Q4_K_M.gguf']),
 ]:
     for f in files:
         hf_hub_download(repo, f)
@@ -138,11 +143,11 @@ uv run python benchmark.py --full-sweep
 # If port 8080 is taken (e.g. another dev server), run on the next free port:
 uv run python benchmark.py --port 8081
 
-# Run one model's configs (substring match -- e.g. both gemma-4-e2b modes)
+# Run one model's configs (substring match across routine and challenger sets)
 uv run python benchmark.py --model gemma-4-e2b
 
 # An explicit filter searches routine, challenger, and current agentic text sets
-uv run python benchmark.py --model north-mini
+uv run python benchmark.py --model mellum2
 
 # Run only thinking configs
 uv run python benchmark.py --model -think
@@ -152,8 +157,11 @@ uv run python benchmark.py --model -think
 # and never replace the canonical benchmark.json / RESULTS.md.
 uv run python benchmark.py --model gemma-4-e2b --category structured,consistency -n 20
 
-# Smaller sample size for a quick smoke test
-uv run python benchmark.py -n 1
+# Historical reproduction only; requires the retired Ling and Granite weights
+uv run python reasoning_experiment.py
+
+# Smaller sample size for a quick smoke test; its timing is not interpreted
+uv run python benchmark.py -n 1 --no-wait-for-idle
 ```
 
 ### Avoiding sleep mid-run
@@ -174,7 +182,8 @@ nohup nice -n 10 caffeinate -dimu uv run python benchmark.py \
 disown
 ```
 
-This covers the five-config routine. Previous dominated challengers and the historical configurations are retired
+This currently covers the three-config routine; there are no active challengers.
+Previous dominated challengers and historical configurations are retired
 from reruns. Before starting, the harness verifies every required GGUF and companion
 MTP head and exits with status 2 when an asset is missing. Outside a full sweep, absent
 main weights may still be skipped, but a downloaded config with a missing companion
@@ -238,19 +247,17 @@ on every request (server default may clip the tail).
 | Model | Temperature | top_p | top_k | presence / repetition penalty | Source |
 |---|---|---|---|---|---|
 | Gemma 4 | 1.0 | 0.95 | 64 | - | [Gemma cards](https://ai.google.dev/gemma/docs/core) |
-| LFM2.5-8B-A1B | 0.2 | 1.0 | 80 | repetition 1.05 | [official model card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
 | Mellum2-12B | 0.6 | 0.95 | 20 | - | [official model card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
+| Ling-3.0-tiny | 1.0 | 0.95 | 20 | - | [official model card](https://huggingface.co/inclusionAI/Ling-3.0-tiny) |
 
 The exact researched presets for Qwen3.8-27B, LFM2.5-2.6B, Nanbeige4.2-3B, and Fara1.5-4B,
 including context, output, thinking, tool-template, and scenario controls, are recorded
 in [configuration notes](docs/configuration.md#researched-challenger-presets).
 
 Notes:
-- **repetition_penalty** is LFM2.5's documented anti-loop knob and is sent as llama.cpp
-  `repeat_penalty`.
-- **Gemma 4 has a thinking toggle** (`enable_thinking`, unlike Gemma 3), so it runs a
-  think/nothink pair. `enable_thinking` is sent on every request; toggle-less models
-  ignore it.
+- **Gemma 4 has a thinking toggle** (`enable_thinking`, unlike Gemma 3). The historical
+  think/direct pair established the tradeoff; the target-aligned routine retains only
+  thinking for E2B and direct for 26B-A4B. `enable_thinking` is sent on every request.
 
 ## Server flags applied to all models
 
@@ -316,7 +323,9 @@ current numbers live in `results/COMPARISON.md`, regenerated after each run:
 - **f16 KV cache, not q8_0.** On 32 GB the f16 default fits every model and decodes
   ~1.7x faster than the old q8_0 KV hack (llama-bench, 27B). Quantized K on Metal is costly.
 - **Speed numbers are throttling-sensitive.** Long suite runs throttle thermally; treat
-  the suite's tok/s as relative and measure peak with `llama-bench` on a cool machine.
+  the suite's tok/s as relative. Normal CLI runs wait automatically for an idle window
+  before every model; `--no-wait-for-idle` exists only for smoke/debug runs. Measure peak
+  with `llama-bench` on a cool machine.
 
 ## Results
 
@@ -336,9 +345,11 @@ after a complete benchmark to refresh the comparison and README quick-choice tab
   a run before reading its long-context column as a model result.
 - **Speed vs accuracy are separate concerns.** Absolute `tok/s` from a long full-suite
   run is depressed by thermal throttling that accumulates over hours (early configs run
-  cooler/faster than late ones). For true peak decode speed, measure one model on a cool
-  machine with `llama-bench`, not the tail of a multi-hour suite. The suite's tok/s is
-  fine for *relative* comparisons measured back-to-back (think/no-think).
+  cooler/faster than late ones). The idle gate runs again after each server stops, before
+  the next model starts, so external work or residual benchmark load can delay that next
+  measurement. For true peak decode speed, measure one model on a cool machine with
+  `llama-bench`, not the tail of a multi-hour suite. The suite's tok/s is fine for
+  *relative* comparisons measured back-to-back.
 - **think vs no-think is compared on the same MTP model.** Both modes run the same
   prompt suite from the same MTP GGUF, so any pass-total difference is a real mode
   effect, not a prompt-set or build artifact. Compare think and direct on the same run.

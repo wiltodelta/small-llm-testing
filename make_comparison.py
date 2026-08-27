@@ -28,23 +28,11 @@ QUICK_CHOICES = {
         "think",
         "Compact reasoning",
     ),
-    "gemma-4-e2b-Q8_0-nothink": (
-        "Gemma 4 E2B",
-        "Q8_0 + MTP",
-        "direct",
-        "Maximum compact-model throughput",
-    ),
     "gemma-4-26b-a4b-Q4_K_M-nothink": (
         "Gemma 4 26B-A4B",
         "UD-Q4_K_M + MTP",
         "direct",
         "Low-latency near-perfect answers",
-    ),
-    "lfm2.5-8b-a1b-Q8_0": (
-        "LFM2.5-8B-A1B",
-        "Q8_0",
-        "native",
-        "Small active-parameter MoE",
     ),
     "mellum2-12b-a2.5b-think-Q4_K_M": (
         "Mellum2-12B-A2.5B",

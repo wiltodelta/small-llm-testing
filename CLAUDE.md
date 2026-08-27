@@ -14,26 +14,26 @@ uv sync
 # Run the curated routine benchmark (n=3 samples per prompt)
 uv run python benchmark.py
 
-# Add current challengers, or run every current text configuration
+# Add any current challengers, or run every current text configuration
 uv run python benchmark.py --include-challengers
 uv run python benchmark.py --full-sweep
 
 # Explicit filters search the routine, challenger, and agentic text sets
-uv run python benchmark.py --model gemma-4-e2b   # both gemma-4-e2b modes
+uv run python benchmark.py --model gemma-4-e2b   # curated E2B thinking config
 uv run python benchmark.py --model -think        # all thinking configs
 
 # Category-filtered reliability recheck (high n); never publishes canonical results
 uv run python benchmark.py --model gemma-4-e2b --category structured,consistency -n 20
 
 # Quick smoke test
-uv run python benchmark.py -n 1
+uv run python benchmark.py -n 1 --no-wait-for-idle
 ```
 
 Default llama-server port: **8080**.
 
-Every run produces timing numbers, so confirm the machine is idle before starting one:
-`sysctl -n vm.loadavg` under ~4.0 and swap not near full. Under load a config has read
-1.7 tok/s where it otherwise measures 15.
+Normal CLI runs wait automatically before each model until two consecutive 30-second
+checks report one-minute load below 4.0. Use `--no-wait-for-idle` only for smoke/debug
+runs whose timing will not be interpreted.
 
 ## Scripts
 
@@ -44,6 +44,9 @@ Every run produces timing numbers, so confirm the machine is idle before startin
   configs finish; `--category` runs never publish canonical results.
 - `make_comparison.py` -- regenerates `results/COMPARISON.md` and the README quick-choice
   table from a complete `benchmark.json`.
+- `reasoning_experiment.py` -- reproduces the completed direct, low-effort, and
+  6,144-token bounded-thinking screen without replacing canonical results; its preflight
+  requires the retired Ling and Granite weights, which are no longer cached.
 - `tests/` -- pytest unit tests for the pure verifier logic (`v_number`, `v_json`,
   `v_python_exec`, ...) and the comparison aggregation helpers. No llama-server needed.
 

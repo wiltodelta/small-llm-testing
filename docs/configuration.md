@@ -5,21 +5,27 @@ ever measured. A regression test pins its literal names so a broad experimental 
 cannot silently become the default again. Historical results and the retirement policy
 are documented in the README.
 
-`CHALLENGERS` and `AGENTIC_TEXT_MODELS` are both empty since 2026-08-23. The machinery
-stays for the next candidate; `--include-challengers` and `--full-sweep` therefore run
-the curated five today. Four configs were dropped that day, each for cost against what it
-still had left to say, and their presets and measurements are kept below:
+`CHALLENGERS` and `AGENTIC_TEXT_MODELS` are empty. The default routine,
+`--include-challengers`, and `--full-sweep` therefore select the same three measured
+target-aligned configs until a new challenger clears its research and runtime gates.
+Historical presets and measurements stay below so retired models do not have to be
+rediscovered:
 
 | Dropped | Why |
 |---|---|
+| Gemma 4 E2B direct | 27/36 on the target categories against its thinking sibling's 35/36; the shared weights stay for thinking |
+| LFM2.5-8B-A1B | 33/36 on the target categories and an 8.4 GB footprint, dominated by the compact Gemma and Mellum options |
 | Qwen3.8-27B (think + direct) | 1.5-3.3 tok/s; one article answer runs past an hour |
 | Nemotron 3.5 Lightning 30B-A3B | 2347s for 3/9 long context, the worst in the fleet, in the one category this suite exists to measure |
 | North Mini Code 1.0 | Harness mismatch, not just 1645s: it never terminates on the article with no contradiction, at 4096 or at 12288 tokens, and its card asks for interleaved thinking carried between turns |
 | Gemma 4 26B-A4B think | 2505s against its own direct sibling's 67s, for a lower score (64/66 vs 65/66) and a lower agent score (25/27 vs 27/27) |
+| Ling-3.0-tiny | Direct scored 12/27; bounded thinking scored 26/27 in 1,460s and reached the 6,144-token budget on every consistent long-context sample, while Mellum scored 27/27 in 269s |
+| Granite-4.2-8B | Low effort scored 62/66 in 240s on the complete suite, including 0/3 on `logic_syllogism_no`; direct was inaccurate and full thinking was prohibitively slow |
 
-An explicit `--model` filter searches the curated set; historical dominated models are
-intentionally not selectable. Fara stays outside all of these because its evaluation
-requires screenshots and browser actions.
+An explicit `--model` filter searches the routine and current challenger sets;
+historical dominated models are intentionally not selectable. Fara's preset remains as
+a historical multimodal record, but its GUI evaluation and local weights are outside the
+unattended text-auditing target.
 
 Each `ModelConfig` defines:
 
@@ -39,6 +45,8 @@ Each `ModelConfig` defines:
   requests. The retired Qwen3.8-27B preset below is the worked example.
 - `reasoning_effort`, sent as an OpenAI-compatible top-level request field for thinking
   requests. llama.cpp maps it into the chat-template kwargs.
+- `low_effort`, sent as Granite 4.2's documented `low_effort=true` chat-template kwarg
+  on thinking requests only.
 - `server_args`, for model-specific llama-server overrides.
 
 Gemma models use the Unsloth GGUFs with a separate `mtp-*.gguf` draft. `_start_server`
@@ -102,15 +110,35 @@ All rows use `min_p=0`; omitted presence and repetition penalties are neutral `0
 |---|---|---|---|---|
 | Gemma 4 E2B and 26B-A4B | `temp=1`, `top_p=.95`, `top_k=64` | Separate think/direct configs; thinking for math, reasoning, coding, consistency, and longcontext | 131K context; official examples use 512-1,024 output tokens, not a stated maximum | [official Gemma 4 card](https://huggingface.co/google/gemma-4-e2b-it) |
 | LFM2.5-8B-A1B | `.2/1/80`, repetition `1.05` | No thinking toggle; general chat and tool use share the native template | 128K context; official example uses 8,192 output tokens, not a stated maximum | [official card](https://huggingface.co/LiquidAI/LFM2.5-8B-A1B) |
-| Mellum2-12B-A2.5B | `.6/.95/20` | Native thinking, no direct toggle; intended for coding and reasoning | 131K context; official usage example allows 81,920 output tokens | [official card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
+| Mellum2-12B-A2.5B | `.6/.95/20` | Native thinking with local `--reasoning-budget 6144`; intended for coding and reasoning | 131K context; official usage example allows 81,920 output tokens | [official card](https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Thinking) |
 | Nemotron 3.5 Lightning 30B-A3B | `1/.95/0` | `enable_thinking` follows the suite category gate; embedded MTP | Up to 1M context; the suite uses 16K and does not claim local 1M feasibility | [official card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
 | North Mini Code 1.0 | `1/.95/0` | Interleaved thinking should remain enabled and carried between agent turns; JSON-schema tools | 256K context, 64K maximum output; official simple generation example uses 1,024 | [official card](https://huggingface.co/CohereLabs/North-Mini-Code-1.0) |
 
-Retired challenger presets (Qwen3.8-27B, LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer) are specified
-below so a future rerun does not rediscover them. Nemotron stays in `CHALLENGERS`
-pending a rerun on the corrected budget (derived article cap plus `REQUEST_TIMEOUT`
-1800s); Qwen3.8-27B was retired on 2026-08-23 and its preset moved into that list. Fara1.5-4B is also below, but it is rerun separately
-from the text sweep.
+### Local reasoning-mode experiment, 2026-08-26
+
+The nine consistency and long-context prompts were run three times per configuration.
+This was a short configuration screen, not a replacement for the complete 22-prompt
+sweep or a high-N reliability result.
+
+| Configuration | Passes | Wall time | Verdict |
+|---|---:|---:|---|
+| Mellum2 thinking, `--reasoning-budget 6144` | 27/27 | 269s | Recheck at high N; the short run did not reproduce the earlier unbounded nontermination, but no paired seeds isolate the budget as the cause |
+| Ling direct | 12/27 | 7s | Reject; disabling thinking destroys target accuracy |
+| Ling thinking, `--reasoning-budget 6144` | 26/27 | 1,460s | Bounded but still unstable; every `longctx_consistent` sample reached the budget and one returned the wrong answer |
+| Granite direct | 14/27 | 575s | Reject; both accuracy and termination behavior are poor |
+| Granite low effort | 25/27 | 138s | Recheck at high N; all nine long-context attempts passed without runaway reasoning |
+| Granite thinking, `--reasoning-budget 6144` | 26/27 | 5,325s | Reject; near-ceiling accuracy does not justify an 89-minute nine-prompt screen, with several 4K-6K-token answers |
+
+The screen advanced bounded Mellum2 and Granite low effort to a complete-suite run; its
+`n=3` scores were estimates, not promotion results. The complete 2026-08-26 sweep then
+confirmed Mellum at 66/66 in 527s. Granite scored 62/66 in 240s, including 0/3 on
+`logic_syllogism_no` and 2/3 on `cons_digit_swap`, so it did not clear the promotion
+gate and was removed from `CHALLENGERS`.
+
+Retired challenger presets (Qwen3.8-27B, LFM2.5-2.6B, Nanbeige4.2-3B, Muse Glimmer,
+and Nemotron 3.5 Lightning) are specified below so a future rerun does not rediscover
+them. Nemotron and Qwen3.8-27B were retired on 2026-08-23. Fara1.5-4B is also below,
+but it is rerun separately from the text sweep.
 
 ## Researched challenger presets
 
@@ -216,10 +244,47 @@ local verdicts are retained so a future rerun does not have to rediscover them.
 - Sources: [official card](https://huggingface.co/inclusionAI/Ling-3.0-tiny) and
   llama.cpp [PR #26608](https://github.com/ggml-org/llama.cpp/pull/26608) (BailingMoE3,
   merged 2026-08-17).
-- Local smoke, 2026-08-20: llama.cpp build 10544 loaded the Q8_0 at `-c 2048` and
-  returned `pong` with thinking off. `/opt/homebrew/bin/llama-server` is still
-  `llama-cpp-bundled` 10380, which predates that merge and cannot load the
-  architecture. Do not add to `CHALLENGERS` until the project binary includes it.
+- Local smoke, 2026-08-25: PATH `llama-server`, `llama-cpp-bundled` build 10630,
+  loaded the Q8_0 with full Metal offload and returned a healthy ready state. The
+  runtime gate cleared. Retired 2026-08-26 after the reasoning-mode screen: direct
+  scored 12/27, while bounded thinking took 1,460s for 26/27 and remained budget-bound.
+  Its local Q8_0 weights were removed.
+
+### Granite 4.2
+
+Granite-4.2-8B is the sole challenger in the complete sweep requested on 2026-08-26. It
+is unusually close to this benchmark's target: IBM documents structured-output RL,
+reasoning-augmented tool calling, and long-horizon agentic training in addition to code
+and instruction following.
+
+- Official sampling for all modes: `temperature=1.0`, `top_p=0.95`. The official
+  generation config does not set `top_k`, `min_p`, presence penalty, or repetition
+  penalty, so the suite would use neutral values `0`, `0`, `0`, and `1`.
+- Full thinking is the default. The chat template also documents non-thinking and
+  low-effort modes. The local configuration screen selected low effort: 25/27 in 138s,
+  including 9/9 long-context attempts. Direct scored 14/27, while 6,144-token bounded
+  thinking scored 26/27 but took 5,325s. The card's examples use 8,192 output tokens
+  for thinking and 2,048 for direct responses; these are examples, not stated limits.
+- The transformer config declares 131,072 positions. The card separately describes a
+  long-context extension to 512K; the local benchmark should retain its measured 16K
+  context unless a larger context is needed and fits the working set.
+- The official dense checkpoints have 3.66B, 8.79B, and 29.28B parameters. Bartowski's
+  2026-08-25 GGUF repositories publish Q8_0 files of 3.89 GB for 3B and 9.35 GB for 8B;
+  the 30B Q4_K_M is 18.03 GB and is excluded as a dense-model speed/resource mismatch.
+- Candidate artifact: `bartowski/granite-4.2-8b-GGUF:granite-4.2-8b-Q8_0.gguf`,
+  repository revision `a592100df8fe4931c7cffbac7b28e8176a1d52da`. The upstream checkpoint revision is
+  `41a8a2d41c54ef4a71741b3e62604f4caaec9295`.
+- Sources: [official 8B card](https://huggingface.co/ibm-granite/granite-4.2-8b),
+  [official generation config](https://huggingface.co/ibm-granite/granite-4.2-8b/blob/41a8a2d41c54ef4a71741b3e62604f4caaec9295/generation_config.json), and
+  [GGUF repository](https://huggingface.co/bartowski/granite-4.2-8b-GGUF).
+- Local smoke, 2026-08-25: installed llama.cpp build 10630 at commit `d222767c7`
+  loaded the Q8_0 at `-ngl 99 -fa on -ub 1024 -c 16384`. With the official
+  `temperature=1.0`, `top_p=0.95`, and neutral `top_k=0`, direct mode returned `OK` in
+  2 tokens and full thinking returned `OK` in 48 tokens; neither response was truncated.
+  End-to-end runtime compatibility cleared. The complete 2026-08-26 low-effort sweep
+  scored 62/66 in 240s: all long-context attempts passed, but `logic_syllogism_no`
+  failed 0/3 and `cons_digit_swap` failed 1/3. Retired from `CHALLENGERS`; the preset
+  and measurements remain for provenance. Its local Q8_0 weights were removed.
 
 ### Fara1.5-4B
 

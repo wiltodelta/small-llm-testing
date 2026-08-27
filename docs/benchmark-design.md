@@ -110,8 +110,12 @@ means llama.cpp reported `finish_reason: "length"`, so the generation cap stoppe
 model mid-answer and the verifier judged a fragment. Failed API attempts retain
 their measured wall time; a request timeout therefore contributes the full timeout
 duration to prompt and model totals.
-Speed (tok/s) from a long suite run is thermally throttled -- use `llama-bench` on a
-cool machine for true peak decode speed; the suite's tok/s is for relative A/Bs.
+Speed (tok/s) from a long suite run is thermally throttled and can include concurrent
+work. Normal CLI runs wait before each model until `load1 < 4.0` on two consecutive
+checks 30 seconds apart. A failed check resets the streak, so a transient dip cannot
+start a multi-hour measurement. `--no-wait-for-idle` bypasses the gate for smoke/debug
+runs whose timing is not interpreted. Use `llama-bench` on a cool machine for true peak
+decode speed; the suite's tok/s is for relative A/Bs.
 
 **`REQUEST_TIMEOUT` and the generation cap are one setting.** An attempt can only reach
 its cap if `REQUEST_TIMEOUT >= cap / decode tok/s`. When it cannot, every long prompt on
@@ -119,11 +123,11 @@ that config records `timeout` and the category measures the harness. Check the a
 against the slowest config in the run before trusting a long-context column.
 
 **Evaluating accuracy-affecting toggles (think/no-think, sampling): run both variants and
-read per-category, never judge from the aggregate.** The curated Gemma configurations
-retain a think/nothink pair for exactly this reason. A previous aggregate suggested that
-thinking only added latency, while the comparable per-category run showed that it rescued
-math and reasoning cases on smaller Gemma models. The aggregate hid the effect because
-`structured` was at ceiling and diluted the signal.
+read per-category, never judge from the aggregate.** The historical Gemma pairs provide
+that comparison. Per-category results showed that thinking rescued E2B on the target
+agent categories (35/36 against 27/36), while 26B direct beat its thinking sibling. The
+routine therefore keeps the winning mode for each size instead of paying to repeat the
+losing modes indefinitely.
 
 ## Reliability rechecks at higher n
 

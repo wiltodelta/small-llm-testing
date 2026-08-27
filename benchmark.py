@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import socket
 import subprocess
@@ -40,6 +41,9 @@ REQUEST_TIMEOUT = 1800
 DEFAULT_PORT = 8080
 DEFAULT_N_RUNS = 3  # each prompt sampled this many times to smooth out temperature noise
 DEFAULT_N_CTX = 16384  # server context; per-model override via ModelConfig.n_ctx
+IDLE_LOAD_THRESHOLD = 4.0
+IDLE_CONFIRMATIONS = 2
+IDLE_POLL_SECONDS = 30
 # Tokens held back from n_ctx for the article prompt itself when sizing an article-scale
 # answer. The Ferrel article is ~2.5k tokens; 4096 leaves headroom for template overhead.
 ARTICLE_PROMPT_RESERVE = 4096
@@ -82,6 +86,8 @@ class ModelConfig:
     direct_sampling: SamplingPreset | None = None
     # OpenAI-compatible reasoning effort for models trained on named effort levels.
     reasoning_effort: str | None = None
+    # Granite 4.2 exposes a separate low-effort thinking template toggle.
+    low_effort: bool = False
     # Server context window. It bounds the article prompt plus its answer, so it is the
     # setting the long-context generation cap is derived from -- see ARTICLE_PROMPT_RESERVE.
     # Raise it per model only from a measured server start, never from an estimate.
@@ -93,53 +99,37 @@ class ModelConfig:
         return self.n_ctx - ARTICLE_PROMPT_RESERVE
 
 
-def _gemma_pair(label: str, hf: str, extra_args: tuple[str, ...] = ()) -> list[ModelConfig]:
-    """Return think and no-think configs for one Gemma 4 model."""
-    return [
-        ModelConfig(name=f"{label}-think", hf=hf, thinking=True, server_args=extra_args),
-        ModelConfig(name=f"{label}-nothink", hf=hf, thinking=False, server_args=extra_args),
-    ]
-
-
 MODELS: list[ModelConfig] = [
-    # Curated routine core from the 2026-07-29 full run. Gemma E2B is the compact
-    # speed/accuracy reference and keeps its think + nothink pair, which is where the
-    # mode tradeoff is read (design doc: never judge a toggle from the aggregate).
-    # Unsloth's separate `mtp-*.gguf` draft heads are auto-attached for lossless MTP.
-    *_gemma_pair("gemma-4-e2b-Q8_0", "unsloth/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf"),
-    # 26B-A4B runs direct only. Its thinking config was dropped 2026-08-23: 2505s against
-    # this one's 67s, for a lower score (64/66 vs 65/66) and a lower agent score
-    # (25/27 vs a clean 27/27). A config beaten by its own sibling on every axis while
-    # costing 37x the wall time has nothing left to measure.
+    # The routine set follows the background data-auditing target rather than retaining
+    # every historical speed reference. Gemma E2B thinking is the compact option; its
+    # direct sibling is not useful for this role. The separate MTP head is auto-attached.
+    ModelConfig(
+        name="gemma-4-e2b-Q8_0-think",
+        hf="unsloth/gemma-4-E2B-it-GGUF:gemma-4-E2B-it-Q8_0.gguf",
+        thinking=True,
+    ),
+    # 26B-A4B runs direct only. Its thinking sibling was slower and less accurate on the
+    # complete and agent-scenario suites; the dated measurements live in the README.
     ModelConfig(
         name="gemma-4-26b-a4b-Q4_K_M-nothink",
         hf="unsloth/gemma-4-26B-A4B-it-GGUF:gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
         thinking=False,
     ),
-    # Compact MoE alternatives: LFM is the 1.5B-active edge reference; Mellum2 is the
-    # coding/reasoning leader from the full run.
-    ModelConfig(
-        name="lfm2.5-8b-a1b-Q8_0",
-        hf="LiquidAI/LFM2.5-8B-A1B-GGUF:LFM2.5-8B-A1B-Q8_0.gguf",
-        temperature=0.2,
-        top_p=1.0,
-        top_k=80,
-        repetition_penalty=1.05,
-    ),
+    # Mellum2 is the smaller high-accuracy option. Its measured reasoning budget bounds
+    # nontermination; the dated selection evidence lives in docs/configuration.md.
     ModelConfig(
         name="mellum2-12b-a2.5b-think-Q4_K_M",
         hf="JetBrains/Mellum2-12B-A2.5B-Thinking-GGUF-Q4_K_M:Mellum2-12B-A2.5B-Thinking-Q4_K_M.gguf",
         temperature=0.6,
         top_p=0.95,
         top_k=20,
+        server_args=("--reasoning-budget", "6144"),
     ),
 ]
 
-# Empty since 2026-08-23. Nemotron 3.5 Lightning was the last entry and was dropped for
-# the same reason as Qwen3.8: 2347s for the worst long-context score in the fleet (3/9,
-# six answers cut off), which is the one category this suite exists to measure. Retired
-# presets and their measurements live in docs/configuration.md. Use --full-sweep to add
-# the agentic set, or --model to select one config directly.
+# Granite low effort failed its complete-suite promotion gate. Its measured preset and
+# dated result remain in docs/configuration.md and reasoning_experiment.py rather than
+# in future reruns.
 CHALLENGERS: list[ModelConfig] = []
 
 # Empty since 2026-08-23. North Mini Code was dropped as a harness mismatch, not just for
@@ -1012,7 +1002,47 @@ def _port_holder(port: int) -> str | None:
     return out[1] if len(out) > 1 else "unknown process"
 
 
-def _missing_model_assets(
+def _wait_for_idle(
+    *,
+    threshold: float = IDLE_LOAD_THRESHOLD,
+    confirmations: int = IDLE_CONFIRMATIONS,
+    poll_seconds: int = IDLE_POLL_SECONDS,
+) -> None:
+    """Wait until one-minute load stays below `threshold` for consecutive checks.
+
+    The gate runs before each model, after the previous server has stopped. Requiring
+    consecutive readings prevents a brief dip from starting a multi-hour measurement.
+    """
+    if confirmations < 1:
+        raise ValueError("idle confirmations must be at least 1")
+    streak = 0
+    while streak < confirmations:
+        load1, load5, load15 = os.getloadavg()
+        if load1 < threshold:
+            streak += 1
+            log.info(
+                "Idle check %d/%d passed: load %.2f %.2f %.2f (threshold %.2f)",
+                streak,
+                confirmations,
+                load1,
+                load5,
+                load15,
+                threshold,
+            )
+        else:
+            streak = 0
+            log.info(
+                "Waiting for idle: load %.2f %.2f %.2f; need load1 < %.2f",
+                load1,
+                load5,
+                load15,
+                threshold,
+            )
+        if streak < confirmations:
+            time.sleep(poll_seconds)
+
+
+def missing_model_assets(
     models: Iterable[ModelConfig],
     *,
     require_weights: bool = True,
@@ -1176,6 +1206,8 @@ def _chat(
     if max_tokens_cap is not None:
         max_tokens = min(max_tokens, max_tokens_cap)
     template_kwargs: dict[str, object] = {"enable_thinking": thinking}
+    if thinking and model_cfg.low_effort:
+        template_kwargs["low_effort"] = True
     if model_cfg.reasoning_strength is not None:
         template_kwargs["reasoning_strength"] = model_cfg.reasoning_strength if thinking else "low"
     sampling = (
@@ -1317,6 +1349,7 @@ def run_benchmark(
     prompts: list[Prompt] | None = None,
     save_aggregate_progress: bool = True,
     snapshot_tag: str | None = None,
+    wait_for_idle: bool = False,
 ) -> list[ModelResult]:
     """Run the prompt suite against the selected models, sampling each prompt `n` times.
 
@@ -1324,6 +1357,7 @@ def run_benchmark(
     `snapshot_tag` so per-model snapshots land in a distinct file instead of overwriting
     the full-suite snapshot. `save_aggregate_progress` must stay off for filtered runs --
     a partial prompt set must never replace the canonical benchmark.json/RESULTS.md.
+    The CLI enables `wait_for_idle`; direct test callers can leave it off.
     """
     if models is None:
         models = MODELS
@@ -1335,6 +1369,9 @@ def run_benchmark(
         if not _is_model_downloaded(model):
             log.warning("Skipping %s -- not downloaded. See README for download instructions.", model.name)
             continue
+        if wait_for_idle:
+            log.info("Waiting for an idle window before %s", model.name)
+            _wait_for_idle()
         log.info("=== Model: %s ===", model.name)
         try:
             proc = _start_server(model, port)
@@ -1577,6 +1614,11 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_N_RUNS,
         help=f"Sample each prompt this many times (default: {DEFAULT_N_RUNS})",
     )
+    parser.add_argument(
+        "--no-wait-for-idle",
+        action="store_true",
+        help="Start models immediately instead of waiting for two load1 readings below 4.0",
+    )
     return parser.parse_args()
 
 
@@ -1629,7 +1671,7 @@ def main() -> None:
         log.error("Rerun on a free port, e.g. --port %d. Do not kill a holder that is not ours.", args.port + 1)
         raise SystemExit(2)
 
-    missing = _missing_model_assets(models, require_weights=args.full_sweep)
+    missing = missing_model_assets(models, require_weights=args.full_sweep)
     if missing:
         scope = "Full sweep" if args.full_sweep else "Selected models"
         log.error("%s not ready; missing %d required model assets", scope, len(missing))
@@ -1644,6 +1686,7 @@ def main() -> None:
         prompts=selected_prompts,
         save_aggregate_progress=not args.full_sweep and complete_prompt_set,
         snapshot_tag=snapshot_tag,
+        wait_for_idle=not args.no_wait_for_idle,
     )
     if not results:
         log.error("No models completed; canonical results unchanged")

@@ -21,11 +21,10 @@
   port held by another project skipped four models in 20 minutes before anyone looked.
 - OLMo 3.1 32B needs `--jinja` and a current llama.cpp. Build 9590 failed on its
   `tojson` filter; build 10090 loads the original template and serves valid completions.
-- Ling-3.0-tiny needs llama.cpp PR #26608 (BailingMoE3, build 10544+). PATH
-  `llama-server` is `llama-cpp-bundled` 10380 and fails to load it. A Homebrew
-  `llama.cpp` HEAD-6503355 binary exists under Cellar but is not linked, because
-  it conflicts with `llama-cpp-bundled`. Do not `brew link --overwrite` that
-  without choosing which formula owns `/opt/homebrew/bin/llama-server`.
+- Historical Ling-3.0-tiny reruns need llama.cpp PR #26608 (BailingMoE3, build
+  10544+). It loaded on `llama-cpp-bundled` build 10630, but the model is retired and
+  its local Q8_0 was removed. The bundled formula owns both llama.cpp and its matching
+  ggml, avoiding cross-formula library drift.
 - Muse Glimmer needed llama.cpp PR #26841. It is retired from reruns; the note
   remains only for historical snapshots.
 - Nemotron 3.5 Lightning GGUFs need llama.cpp 10362+. The local `Q3_K_M` is a

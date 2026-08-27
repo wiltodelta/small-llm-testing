@@ -24,12 +24,12 @@ from benchmark import (
     PROMPTS,
     ModelConfig,
     SamplingPreset,
-    _missing_model_assets,
     _port_holder,
     _run_one_attempt,
     _select_models,
     _strip_think,
     fail_kind,
+    missing_model_assets,
     run_benchmark,
     v_json,
     v_number,
@@ -69,22 +69,21 @@ def test_default_model_set_is_curated() -> None:
     # Literal names intentionally pin the routine core; do not derive this set from MODELS.
     assert {model.name for model in MODELS} == {
         "gemma-4-e2b-Q8_0-think",
-        "gemma-4-e2b-Q8_0-nothink",
         "gemma-4-26b-a4b-Q4_K_M-nothink",
-        "lfm2.5-8b-a1b-Q8_0",
         "mellum2-12b-a2.5b-think-Q4_K_M",
     }
+    mellum = next(model for model in MODELS if model.name.startswith("mellum2-"))
+    assert mellum.server_args == ("--reasoning-budget", "6144")
 
 
 def test_challenger_model_set_is_explicit() -> None:
-    # Empty since 2026-08-23; the machinery stays for the next challenger.
     assert CHALLENGERS == []
     assert len(CURRENT_TEXT_MODELS) == len(MODELS) + len(CHALLENGERS)
 
 
 def test_full_sweep_model_set_is_explicit_and_unique() -> None:
     assert AGENTIC_TEXT_MODELS == []
-    assert len(FULL_SWEEP_MODELS) == 5
+    assert len(FULL_SWEEP_MODELS) == 3
     assert len({model.name for model in FULL_SWEEP_MODELS}) == len(FULL_SWEEP_MODELS)
 
 
@@ -141,18 +140,26 @@ def test_missing_model_assets_deduplicates_shared_weight(
 
     monkeypatch.setattr(benchmark, "_resolve_local_path", missing_path)
 
-    assert _missing_model_assets(MODELS[:2]) == [MODELS[0].hf]
+    shared_weight = [
+        ModelConfig(name="gemma-think", hf=MODELS[0].hf, thinking=True),
+        ModelConfig(name="gemma-direct", hf=MODELS[0].hf, thinking=False),
+    ]
+
+    assert missing_model_assets(shared_weight) == [MODELS[0].hf]
 
 
 def test_missing_model_assets_allows_absent_weights_outside_full_sweep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    missing = ModelConfig(name="missing", hf="example/model:missing.gguf")
+
     def missing_path(hf: str, *, revision: str | None = None) -> None:
         return None
 
     monkeypatch.setattr(benchmark, "_resolve_local_path", missing_path)
 
-    assert _missing_model_assets(CHALLENGERS, require_weights=False) == []
+    assert missing_model_assets([missing], require_weights=False) == []
+    assert missing_model_assets([missing], require_weights=True) == [missing.hf]
 
 
 def test_missing_model_assets_requires_gemma_mtp_head(
@@ -167,7 +174,7 @@ def test_missing_model_assets_requires_gemma_mtp_head(
 
     monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
 
-    assert _missing_model_assets(MODELS[:2]) == ["unsloth/gemma-4-E2B-it-GGUF:mtp-*.gguf"]
+    assert missing_model_assets([MODELS[0]]) == ["unsloth/gemma-4-E2B-it-GGUF:mtp-*.gguf"]
 
 
 def test_missing_model_assets_requires_muse_dflash_head(
@@ -183,8 +190,24 @@ def test_missing_model_assets_requires_muse_dflash_head(
     monkeypatch.setattr(benchmark, "_resolve_local_path", resolved_path)
 
     expected = ["unsloth/Muse-Glimmer-30B-GGUF:dflash-kquant.gguf"]
-    assert _missing_model_assets([_RETIRED_MUSE]) == expected
-    assert _missing_model_assets([_RETIRED_MUSE], require_weights=False) == expected
+    assert missing_model_assets([_RETIRED_MUSE]) == expected
+    assert missing_model_assets([_RETIRED_MUSE], require_weights=False) == expected
+
+
+def test_wait_for_idle_requires_consecutive_low_readings(monkeypatch: pytest.MonkeyPatch) -> None:
+    loads = iter(((3.0, 4.0, 5.0), (5.0, 4.0, 3.0), (3.5, 3.0, 2.0), (2.5, 2.0, 1.0)))
+    sleeps: list[int] = []
+    monkeypatch.setattr(benchmark.os, "getloadavg", lambda: next(loads))
+    monkeypatch.setattr(benchmark.time, "sleep", sleeps.append)
+
+    benchmark._wait_for_idle(threshold=4.0, confirmations=2, poll_seconds=30)
+
+    assert sleeps == [30, 30, 30]
+
+
+def test_wait_for_idle_rejects_impossible_confirmation_count() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        benchmark._wait_for_idle(confirmations=0)
 
 
 def test_start_server_attaches_muse_dflash(
@@ -293,6 +316,37 @@ def test_chat_sends_muse_reasoning_strength(
     }
 
 
+def test_chat_sends_granite_low_effort_only_while_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
+    payloads: list[dict[str, object]] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"choices": [{"message": {"content": "ok"}}], "usage": {"completion_tokens": 1}}).encode()
+
+    def urlopen(request: object, timeout: int) -> Response:
+        payloads.append(json.loads(request.data.decode()))
+        return Response()
+
+    granite = ModelConfig(
+        name="granite-low",
+        hf="bartowski/granite-4.2-8b-GGUF:granite-4.2-8b-Q8_0.gguf",
+        low_effort=True,
+    )
+    monkeypatch.setattr(benchmark.urllib.request, "urlopen", urlopen)
+
+    benchmark._chat([{"role": "user", "content": "test"}], granite, 8081, thinking=True)
+    benchmark._chat([{"role": "user", "content": "test"}], granite, 8081, thinking=False)
+
+    assert payloads[0]["chat_template_kwargs"] == {"enable_thinking": True, "low_effort": True}
+    assert payloads[1]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 @pytest.mark.parametrize(
     ("thinking", "expected_sampling", "expected_effort"),
     [
@@ -339,6 +393,7 @@ def test_full_sweep_mode_does_not_publish_aggregate_progress(
     tmp_path: Path,
 ) -> None:
     aggregate_writes: list[str] = []
+    idle_checks: list[str] = []
 
     def is_downloaded(model: benchmark.ModelConfig) -> bool:
         return True
@@ -364,10 +419,12 @@ def test_full_sweep_mode_does_not_publish_aggregate_progress(
     monkeypatch.setattr(benchmark, "_stop_server", stop_server)
     monkeypatch.setattr(benchmark, "_save_json", save_json)
     monkeypatch.setattr(benchmark, "_save_markdown", save_markdown)
+    monkeypatch.setattr(benchmark, "_wait_for_idle", lambda: idle_checks.append("idle"))
 
-    results = run_benchmark([MODELS[0]], save_aggregate_progress=False)
+    results = run_benchmark([MODELS[0]], save_aggregate_progress=False, wait_for_idle=True)
 
     assert len(results) == 1
+    assert idle_checks == ["idle"]
     assert aggregate_writes == []
     assert (tmp_path / f"benchmark.{MODELS[0].name}.json").exists()
 
@@ -380,6 +437,7 @@ def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) ->
         port = 8081
         n_runs = 1
         category = None
+        no_wait_for_idle = False
 
     aggregate_writes: list[str] = []
 
@@ -398,7 +456,9 @@ def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) ->
         prompts: list[benchmark.Prompt],
         save_aggregate_progress: bool,
         snapshot_tag: str | None,
+        wait_for_idle: bool,
     ) -> list[benchmark.ModelResult]:
+        assert wait_for_idle is True
         return []
 
     def save_json(results: list[benchmark.ModelResult]) -> None:
@@ -408,7 +468,7 @@ def test_main_does_not_publish_empty_results(monkeypatch: pytest.MonkeyPatch) ->
         aggregate_writes.append("markdown")
 
     monkeypatch.setattr(benchmark, "_parse_args", Args)
-    monkeypatch.setattr(benchmark, "_missing_model_assets", no_missing_assets)
+    monkeypatch.setattr(benchmark, "missing_model_assets", no_missing_assets)
 
     # main() probes the port for real; pin it free so the test does not depend on
     # whatever happens to be listening on this machine.

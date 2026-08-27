@@ -10,8 +10,13 @@ a one-line Swift Metal query (do not guess it):
   comfortably (these were OOM / kernel-panic on the old 16 GB machine).
 - Qwen3.8-27B Q4_K_M (17.1 GB) loaded for the direct config. The thinking config's
   0/66 HTTPError is not a working-set result; recheck with HTTP body logging.
-- Ling-3.0-tiny Q8_0 (8.41 GB) loaded at `-c 2048` on llama.cpp build 10544.
-  The PATH `llama-server` (`llama-cpp-bundled` 10380) cannot load BailingMoE3.
+- Ling-3.0-tiny Q8_0 (8.41 GB) loaded with full Metal offload on PATH
+  `llama-server` (`llama-cpp-bundled` build 10630). It was retired and its local
+  weights removed on 2026-08-26; this remains a historical compatibility result.
+- Granite-4.2-8B Q8_0 (9.35 GB) loaded with full Metal offload at `-c 16384` on PATH
+  `llama-server` build 10630. Direct and full-thinking chat-template smokes both
+  completed without truncation. It was retired after the complete sweep and its local
+  weights were removed on 2026-08-26.
 - North Mini Code 1.0 UD-Q4_K_M (~19.2 GB) loaded at `-c 8192` with full Metal
   offload on llama.cpp build 10090 and completed the text suite without a memory error.
   Rechecked 2026-08-21 on build 10380: it also loads and serves at `-c 16384`, which is
