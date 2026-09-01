@@ -46,7 +46,8 @@ runs whose timing will not be interpreted.
   table from a complete `benchmark.json`.
 - `reasoning_experiment.py` -- reproduces the completed direct, low-effort, and
   6,144-token bounded-thinking screen without replacing canonical results; its preflight
-  requires the retired Ling and Granite weights, which are no longer cached.
+  requires the retired Ling and Granite weights, dropped from the local model
+  cache at retirement.
 - `tests/` -- pytest unit tests for the pure verifier logic (`v_number`, `v_json`,
   `v_python_exec`, ...) and the comparison aggregation helpers. No llama-server needed.
 
